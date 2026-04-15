@@ -734,7 +734,7 @@
                 const percentage = Math.round((currentTokens / maxTokens) * 100);
                 contextText.textContent = `Context: ${currentTokens} / ${maxTokens} (${percentage}%)`;
 
-                // Cambiar color según uso
+                // Change color based on usage
                 contextIndicator.classList.remove('warning', 'danger');
                 if (percentage >= 90) {
                     contextIndicator.classList.add('danger');
@@ -888,7 +888,7 @@
 
                 if (data.success) {
                     loadSessions();
-                    // Si es la sesión actual, actualizar el título en el header
+                    // If it's the current session, update the title in the header
                     if (sessionId === currentSessionId) {
                         const titleEl = document.getElementById('sessionTitle');
                         if (titleEl) titleEl.textContent = trimmed;
@@ -908,7 +908,7 @@
 
                 currentSessionId = data.session_id;
 
-                // Limpiar área de chat
+                // Clear chat area
                 chatArea.innerHTML = `
                     <div class="welcome-message">
                         <h2>New Conversation</h2>
@@ -936,7 +936,7 @@
 
                 currentSessionId = sessionId;
 
-                // Actualizar modelos de la sesión
+                // Update session models
                 if (data.model) modelSelect.value = data.model;
                 if (data.fallback_model && fallbackModelSelect) {
                     fallbackModelSelect.value = data.fallback_model;
