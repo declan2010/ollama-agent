@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ollama WebChat</title>
+    <style>
+        :root {
+            /* Dark theme (default) */
+            --bg-primary: #1a1a2e;
+            --bg-secondary: #16213e;
+            --bg-tertiary: #0f3460;
+            --bg-input: #0f3460;
+            --text-primary: #eee;
+            --text-secondary: #888;
+            --accent: #e94560;
+            --accent-hover: #ff6b6b;
+            --border: #0f3460;
+            --code-bg: #0a0a1a;
+        }
+
+        .light-theme {
+            --bg-primary: #f5f5f5;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #e0e0e0;
+            --bg-input: #ffffff;
+            --text-primary: #333;
+            --text-secondary: #666;
+            --accent: #e94560;
+            --accent-hover: #ff6b6b;
+            --border: #ddd;
+            --code-bg: #f0f0f0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        .sidebar {
+            width: 280px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            transition: background 0.3s, border-color 0.3s;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .sidebar-header h1 {
+            font-size: 1.4rem;
+            color: var(--accent);
+            margin-bottom: 5px;
+        }
+
+        .sidebar-header p {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .new-chat-btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            margin: 15px 20px;
+            transition: background 0.3s;
+        }
+
+        .new-chat-btn:hover {
+            background: var(--accent-hover);
+        }
+
+        .sessions-label {
+            padding: 10px 20px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+
+        .sessions-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 10px;
+        }
+
+        .session-item {
+            padding: 12px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-bottom: 5px;
+            transition: background 0.2s;
+            position: relative;
+        }
+
+        .session-item:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .session-item.active {
+            background: var(--accent);
+        }
+
+        .session-title {
+            font-size: 0.9rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding-right: 30px;
+        }
+
+        .session-meta {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .delete-chat-btn {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 1.1rem;
+            opacity: 0;
+            transition: opacity 0.2s;
+            padding: 5px;
+        }
+
+        .session-item:hover .delete-chat-btn {
+            opacity: 1;
+        }
+
+        .delete-chat-btn:hover {
+            color: #ff4444;
+        }
+
+        .rename-chat-btn {
+            position: absolute;
+            right: 45px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 1.1rem;
+            opacity: 0;
+            transition: opacity 0.2s;
+            padding: 5px;
+        }
+
+        .session-item:hover .rename-chat-btn {
+            opacity: 1;
+        }
+
+        .rename-chat-btn:hover {
+            color: #44aaff;
+        }
+
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            padding: 15px 25px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            transition: background 0.3s, border-color 0.3s;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex: 1;
+        }
+
+        .model-selector {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .model-selector label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .model-selector select {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--accent);
+            padding: 8px 15px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+
+        .model-selector select option {
+            background: var(--bg-secondary);
+        }
+
+        .context-indicator {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            background: var(--bg-tertiary);
+            padding: 5px 12px;
+            border-radius: 15px;
+            border: 1px solid var(--border);
+        }
+
+        .context-indicator.warning {
+            color: #f59e0b;
+            border-color: #f59e0b;
+        }
+
+        .context-indicator.danger {
+            color: #ef4444;
+            border-color: #ef4444;
+        }
+
+        .settings-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 50%;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        .settings-btn:hover {
+            background: var(--bg-tertiary);
+            color: var(--accent);
+        }
+
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .welcome-message {
+            text-align: center;
+            padding: 50px 20px;
+        }
+
+        .welcome-message h2 {
+            font-size: 1.8rem;
+            color: var(--accent);
+            margin-bottom: 15px;
+        }
+
+        .welcome-message p {
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+        }
+
+        .message {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+
+        .message.user .message-avatar {
+            background: var(--accent);
+            color: white;
+        }
+
+        .message.assistant .message-avatar {
+            background: var(--bg-tertiary);
+            color: var(--accent);
+        }
+
+        .message-content {
+            flex: 1;
+            line-height: 1.6;
+            padding: 15px 20px;
+            background: var(--bg-secondary);
+            border-radius: 15px;
+            border-top-left-radius: 5px;
+            transition: background 0.3s;
+        }
+
+        .message.user .message-content {
+            background: var(--bg-tertiary);
+            border-top-left-radius: 15px;
+            border-top-right-radius: 5px;
+        }
+
+        .message-content pre {
+            background: var(--code-bg);
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 10px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+        }
+
+        .message-content code {
+            background: var(--code-bg);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+        }
+
+        .message-content pre code {
+            background: transparent;
+            padding: 0;
+        }
+
+        .input-area {
+            padding: 20px;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+            transition: background 0.3s, border-color 0.3s;
+        }
+
+        .input-container {
+            display: flex;
+            gap: 15px;
+            align-items: flex-end;
+        }
+
+        .input-container textarea {
+            flex: 1;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 15px 20px;
+            color: var(--text-primary);
+            font-size: 1rem;
+            resize: none;
+            min-height: 60px;
+            max-height: 200px;
+            font-family: inherit;
+            transition: background 0.3s, border-color 0.3s, color 0.3s;
+        }
+
+        .input-container textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .send-btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            width: 60px;
+            height: 60px;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 1.5rem;
+            transition: background 0.3s;
+        }
+
+        .send-btn:hover {
+            background: var(--accent-hover);
+        }
+
+        .send-btn:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        .typing-indicator {
+            display: none;
+            padding: 20px;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+
+        .typing-indicator.active {
+            display: block;
+        }
+
+        .typing-dots {
+            display: inline-block;
+        }
+
+        .typing-dots span {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+            margin: 0 3px;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+
+        .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dots span:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+
+        /* Modal Styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--bg-secondary);
+            border-radius: 15px;
+            padding: 30px;
+            min-width: 350px;
+            max-width: 90%;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            transition: background 0.3s;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 25px;
+        }
+
+        .modal-header h2 {
+            font-size: 1.4rem;
+            color: var(--accent);
+        }
+
+        .modal-close {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 5px;
+        }
+
+        .modal-close:hover {
+            color: var(--accent);
+        }
+
+        .setting-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .setting-item:last-child {
+            border-bottom: none;
+        }
+
+        .setting-label {
+            font-size: 1rem;
+        }
+
+        .setting-description {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 5px;
+        }
+
+        .theme-toggle {
+            display: flex;
+            gap: 10px;
+        }
+
+        .theme-btn {
+            background: var(--bg-tertiary);
+            border: 2px solid transparent;
+            color: var(--text-primary);
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .theme-btn:hover {
+            border-color: var(--accent);
+        }
+
+        .theme-btn.active {
+            border-color: var(--accent);
+            background: var(--accent);
+            color: white;
+        }
+
+        .danger-zone {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(255, 68, 68, 0.1);
+            border-radius: 8px;
+        }
+
+        .danger-zone h3 {
+            color: #ff4444;
+            font-size: 1rem;
+            margin-bottom: 10px;
+        }
+
+        .clear-all-btn {
+            background: #ff4444;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.2s;
+        }
+
+        .clear-all-btn:hover {
+            background: #ff6666;
+        }
+
+        .light-theme .clear-all-btn {
+            background: #cc0000;
+        }
+
+        .light-theme .clear-all-btn:hover {
+            background: #ff4444;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h1>🦙 OllamaChat</h1>
+            <p>Local AI Models</p>
+        </div>
+
+        <button class="new-chat-btn" onclick="newChat()">+ New Chat</button>
+
+        <div class="sessions-label">Saved conversations</div>
+
+        <div class="sessions-list" id="sessionsList">
+        </div>
+    </div>
+
+    <div class="main">
+        <div class="header">
+            <div class="header-left">
+                <div class="model-selector">
+                    <label>Model:</label>
+                    <select id="modelSelect">
+                        {% for model in models %}
+                        <option value="{{ model }}" {% if model == current_model %}selected{% endif %}>{{ model }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="model-selector">
+                    <label>Backup:</label>
+                    <select id="fallbackModelSelect">
+                        <option value="">None</option>
+                        {% for model in models %}
+                        <option value="{{ model }}">{{ model }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="context-indicator" id="contextIndicator">
+                    <span id="contextText">Context: 0 tokens</span>
+                </div>
+            </div>
+            <button class="settings-btn" onclick="openSettings()" title="Settings">⚙️</button>
+        </div>
+
+        <div class="chat-area" id="chatArea">
+            <div class="welcome-message">
+                <h2>Welcome to OllamaChat</h2>
+                <p>Select a model and start chatting</p>
+                <p style="font-size: 0.85rem;">Messages are saved automatically</p>
+            </div>
+        </div>
+
+        <div class="typing-indicator" id="typingIndicator">
+            <span class="typing-dots">
+                <span></span><span></span><span></span>
+            </span>
+            Thinking...
+        </div>
+
+        <div class="input-area">
+            <div class="input-container">
+                <textarea id="messageInput" placeholder="Type your message..." rows="1" onkeydown="handleKeyDown(event)"></textarea>
+                <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>⚙️ Settings</h2>
+                <button class="modal-close" onclick="closeSettings()">✕</button>
+            </div>
+
+            <div class="setting-item">
+                <div>
+                    <div class="setting-label">Theme</div>
+                    <div class="setting-description">Choose between dark and light mode</div>
+                </div>
+                <div class="theme-toggle">
+                    <button class="theme-btn" id="darkThemeBtn" onclick="setTheme('dark')">🌙 Dark</button>
+                    <button class="theme-btn" id="lightThemeBtn" onclick="setTheme('light')">☀️ Light</button>
+                </div>
+            </div>
+
+            <div class="danger-zone">
+                <h3>⚠️ Danger Zone</h3>
+                <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 10px;">
+                    This will permanently delete all saved conversations.
+                </p>
+                <button class="clear-all-btn" onclick="clearAllChats()">🗑️ Delete All Chats</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSessionId = '{{ session.get("chat_id", "") }}';
+        let isWaiting = false;
+
+        const chatArea = document.getElementById('chatArea');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const modelSelect = document.getElementById('modelSelect');
+        const fallbackModelSelect = document.getElementById('fallbackModelSelect');
+        const typingIndicator = document.getElementById('typingIndicator');
+
+        // Load saved preferences
+        function loadPreferences() {
+            const savedFallback = localStorage.getItem('ollama-chat-fallback');
+            if (savedFallback) {
+                fallbackModelSelect.value = savedFallback;
+            }
+        }
+
+        fallbackModelSelect.addEventListener('change', function() {
+            localStorage.setItem('ollama-chat-fallback', this.value);
+        });
+
+        // Actualizar indicador de contexto
+        async function updateContextIndicator(currentTokens) {
+            const contextIndicator = document.getElementById('contextIndicator');
+            const contextText = document.getElementById('contextText');
+
+            // Obtener max tokens del modelo actual
+            try {
+                const response = await fetch(`/api/model-info?model=${encodeURIComponent(modelSelect.value)}`);
+                const info = await response.json();
+
+                if (info.error) {
+                    contextText.textContent = `Context: ~${currentTokens} tokens`;
+                    return;
+                }
+
+                const maxTokens = info.num_ctx || info.context_length || 4096;
+                const percentage = Math.round((currentTokens / maxTokens) * 100);
+                contextText.textContent = `Context: ${currentTokens} / ${maxTokens} (${percentage}%)`;
+
+                // Cambiar color según uso
+                contextIndicator.classList.remove('warning', 'danger');
+                if (percentage >= 90) {
+                    contextIndicator.classList.add('danger');
+                } else if (percentage >= 70) {
+                    contextIndicator.classList.add('warning');
+                }
+            } catch (e) {
+                contextText.textContent = `Context: ~${currentTokens} tokens`;
+            }
+        }
+
+        modelSelect.addEventListener('change', function() {
+            // Limpiar contexto al cambiar de modelo
+            updateContextIndicator(0);
+        });
+
+        // Load theme from localStorage
+        function loadTheme() {
+            const theme = localStorage.getItem('ollama-chat-theme') || 'dark';
+            setTheme(theme);
+        }
+
+        function setTheme(theme) {
+            if (theme === 'light') {
+                document.body.classList.add('light-theme');
+            } else {
+                document.body.classList.remove('light-theme');
+            }
+            localStorage.setItem('ollama-chat-theme', theme);
+
+            // Update button states
+            document.getElementById('darkThemeBtn').classList.toggle('active', theme === 'dark');
+            document.getElementById('lightThemeBtn').classList.toggle('active', theme === 'light');
+        }
+
+        function openSettings() {
+            document.getElementById('settingsModal').classList.add('active');
+        }
+
+        function closeSettings() {
+            document.getElementById('settingsModal').classList.remove('active');
+        }
+
+        async function clearAllChats() {
+            if (confirm('Are you sure you want to delete ALL chats? This cannot be undone.')) {
+                try {
+                    const response = await fetch('/api/clear-all-sessions', { method: 'DELETE' });
+                    const data = await response.json();
+
+                    if (data.success) {
+                        alert('All chats deleted successfully');
+                        location.reload();
+                    } else {
+                        alert('Error: ' + (data.error || 'Unknown error'));
+                    }
+                } catch (error) {
+                    alert('Error: ' + error.message);
+                }
+            }
+        }
+
+        // Close modal on outside click
+        document.getElementById('settingsModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeSettings();
+            }
+        });
+
+        loadSessions();
+        loadTheme();
+        loadPreferences();
+
+        messageInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+        });
+
+        function handleKeyDown(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        }
+
+        async function loadSessions() {
+            try {
+                const response = await fetch('/api/sessions');
+                const sessions = await response.json();
+
+                const listEl = document.getElementById('sessionsList');
+                listEl.innerHTML = '';
+
+                if (sessions.length === 0) {
+                    listEl.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-secondary); font-size: 0.85rem;">No saved chats</div>';
+                    return;
+                }
+
+                sessions.forEach(session => {
+                    const div = document.createElement('div');
+                    div.className = 'session-item' + (session.id === currentSessionId ? ' active' : '');
+                    div.innerHTML = `
+                        <div class="session-title">${session.title || 'Untitled'}</div>
+                        <div class="session-meta">${session.model} • ${session.messages_count} msgs</div>
+                        <button class="rename-chat-btn" title="Rename chat" onclick="event.stopPropagation(); renameChat('${session.id}')">✏️</button>
+                        <button class="delete-chat-btn" title="Delete chat" onclick="event.stopPropagation(); deleteChat('${session.id}')">🗑️</button>
+                    `;
+                    div.onclick = () => switchSession(session.id);
+                    listEl.appendChild(div);
+                });
+            } catch (error) {
+                console.error('Error loading sessions:', error);
+            }
+        }
+
+        async function deleteChat(sessionId) {
+            if (confirm('Delete this chat?')) {
+                try {
+                    const response = await fetch(`/api/delete-session/${sessionId}`, { method: 'DELETE' });
+                    const data = await response.json();
+
+                    if (data.success) {
+                        if (sessionId === currentSessionId) {
+                            newChat();
+                        } else {
+                            loadSessions();
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error deleting session:', error);
+                }
+            }
+        }
+
+        async function renameChat(sessionId) {
+            const title = prompt('Rename chat:', '');
+            if (title === null) return; // Cancelado
+
+            const trimmed = title.trim();
+            if (!trimmed) {
+                alert('Title cannot be empty');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/rename-session/${sessionId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: trimmed })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    loadSessions();
+                    // Si es la sesión actual, actualizar el título en el header
+                    if (sessionId === currentSessionId) {
+                        const titleEl = document.getElementById('sessionTitle');
+                        if (titleEl) titleEl.textContent = trimmed;
+                    }
+                } else if (data.error) {
+                    alert(data.error);
+                }
+            } catch (error) {
+                console.error('Error renaming session:', error);
+            }
+        }
+
+        async function newChat() {
+            try {
+                const response = await fetch('/api/new-chat', { method: 'POST' });
+                const data = await response.json();
+
+                currentSessionId = data.session_id;
+
+                // Limpiar área de chat
+                chatArea.innerHTML = `
+                    <div class="welcome-message">
+                        <h2>New Conversation</h2>
+                        <p>Model: ${modelSelect.value}</p>
+                        ${fallbackModelSelect.value ? `<p>Backup: ${fallbackModelSelect.value}</p>` : ''}
+                    </div>
+                `;
+
+                loadSessions();
+            } catch (error) {
+                console.error('Error creating new chat:', error);
+                alert('Error creating new chat');
+            }
+        }
+
+        async function switchSession(sessionId) {
+            try {
+                const response = await fetch(`/api/session/${sessionId}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                currentSessionId = sessionId;
+
+                // Actualizar modelos de la sesión
+                if (data.model) modelSelect.value = data.model;
+                if (data.fallback_model && fallbackModelSelect) {
+                    fallbackModelSelect.value = data.fallback_model;
+                }
+
+                // Limpiar y mostrar mensajes
+                chatArea.innerHTML = '';
+
+                if (data.messages && data.messages.length > 0) {
+                    data.messages.forEach(msg => {
+                        addMessageToUI(msg.role, msg.content);
+                    });
+                } else {
+                    chatArea.innerHTML = `
+                        <div class="welcome-message">
+                            <h2>Conversation</h2>
+                            <p>Model: ${data.model || 'llama3'}</p>
+                        </div>
+                    `;
+                }
+
+                loadSessions();
+            } catch (error) {
+                console.error('Error switching session:', error);
+                alert('Error loading chat');
+            }
+        }
+
+        async function sendMessage() {
+            if (isWaiting) return;
+
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            addMessageToUI('user', message);
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+
+            isWaiting = true;
+            sendBtn.disabled = true;
+            typingIndicator.classList.add('active');
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        model: modelSelect.value,
+                        fallback_model: fallbackModelSelect.value
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    addMessageToUI('assistant', 'Error: ' + data.error);
+                } else {
+                    addMessageToUI('assistant', data.response);
+                    // Actualizar indicador de contexto
+                    if (data.context_usage !== undefined) {
+                        updateContextIndicator(data.context_usage);
+                    }
+                }
+
+                loadSessions();
+            } catch (error) {
+                addMessageToUI('assistant', 'Connection error: ' + error.message);
+            } finally {
+                isWaiting = false;
+                sendBtn.disabled = false;
+                typingIndicator.classList.remove('active');
+            }
+        }
+
+        function addMessageToUI(role, content) {
+            const welcome = chatArea.querySelector('.welcome-message');
+            if (welcome) welcome.remove();
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+
+            const avatar = role === 'user' ? 'U' : '🤖';
+            const avatarClass = role === 'user' ? 'user' : 'assistant';
+
+            let formattedContent = content
+                .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                .replace(/\n/g, '<br>');
+
+            messageDiv.innerHTML = `
+                <div class="message-avatar ${avatarClass}">${avatar}</div>
+                <div class="message-content">${formattedContent}</div>
+            `;
+
+            chatArea.appendChild(messageDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+    </script>
+</body>
+</html>

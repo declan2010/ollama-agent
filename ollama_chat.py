@@ -353,23 +353,6 @@ OLLAMA_TOOLS = [
     {
         'type': 'function',
         'function': {
-            'name': 'local_command',
-            'description': 'Execute a read-only local system command. Only use for: listing files, checking disk space, viewing memory, system info, network status, user info. NEVER use for: rm, del, sudo, chmod, dd, or any write/modify operations.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'command': {
-                        'type': 'string',
-                        'description': 'The command to execute. Examples: "ls -la", "df -h", "free -h", "uname -a", "pwd", "whoami", "uptime", "ip addr", "hostname"'
-                    }
-                },
-                'required': ['command']
-            }
-        }
-    },
-    {
-        'type': 'function',
-        'function': {
             'name': 'web_search',
             'description': 'Search the internet for information. Use this when you need to find current information, news, facts, or answers that require up-to-date data from the web. Returns title, URL, and snippet for each result.',
             'parameters': {

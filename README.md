@@ -114,14 +114,12 @@ List available Ollama models.
 
 The assistant can use these tools when available:
 
-| Tool | Command | Description |
-|------|---------|-------------|
-| `local_command` | System commands | Execute read-only commands (ls, df, free, etc.) |
-| `web_search` | DuckDuckGo | Search the internet for current information |
+| Tool | Description |
+|------|-------------|
+| `web_search` | Search the internet via DuckDuckGo for current information, news, and facts |
 
 ## Security Notes
 
-- Local commands are **read-only** (no rm, chmod, sudo, etc.)
 - Sessions are stored locally on disk
 - No authentication by default (add reverse proxy for production)
 
