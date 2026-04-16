@@ -14,6 +14,10 @@ app = Flask(__name__)
 app.secret_key = 'ollama-chat-secret-key-2024'
 SESSIONS_DIR = 'sessions'
 
+# Crear directorio sessions si no existe
+if not os.path.exists(SESSIONS_DIR):
+    os.makedirs(SESSIONS_DIR)
+
 # Allowed local commands (read-only)
 ALLOWED_COMMANDS = {
     'ls': ['ls', '-la', '-l', '-a', '-R'],
@@ -314,7 +318,23 @@ def process_ollama_response(model, messages, tools=None):
                 else:
                     result = "Search results:\n\n"
                     for idx, r in enumerate(results[:5], 1):
-                        result += f"{idx}. {r['title']}\n   URL: {r['url']}\n   {r['snippet']}\n\n"
+                        result += f"{idx}. {r['title']}\n   URL: {r['url']}\n"
+                        if r.get('full_content'):
+                            result += f"   Content: {r['full_content']}\n\n"
+                        else:
+                            result += f"   {r['snippet']}\n\n"
+                tool_results.append({
+                    'role': 'tool',
+                    'content': result,
+                    'tool_call_id': tool_id
+                })
+            elif func_name == 'fetch_article':
+                url = func_args.get('url', '')
+                article = fetch_article(url)
+                if 'content' in article:
+                    result = f"Article from {url}:\n\n{article['content']}"
+                else:
+                    result = f"Could not fetch article from {url}: {article.get('error', 'Unknown error')}"
                 tool_results.append({
                     'role': 'tool',
                     'content': result,
@@ -371,7 +391,7 @@ OLLAMA_TOOLS = [
         'type': 'function',
         'function': {
             'name': 'web_search',
-            'description': 'Search the internet for information. Use this when you need to find current information, news, facts, or answers that require up-to-date data from the web. Returns title, URL, and snippet for each result.',
+            'description': 'Search the internet for information. Use this when you need to find current information, news, facts, or answers that require up-to-date data from the web. Returns title, URL, and snippet for each result. IMPORTANT: After searching, always use fetch_article on the most relevant URLs to get full content before answering.',
             'parameters': {
                 'type': 'object',
                 'properties': {
@@ -383,12 +403,29 @@ OLLAMA_TOOLS = [
                 'required': ['query']
             }
         }
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'fetch_article',
+            'description': 'Fetch and extract the full text content from a web article URL. Use this after web_search to get detailed content from the most relevant articles before answering the user. Returns the article text content.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'url': {
+                        'type': 'string',
+                        'description': 'The URL of the article to fetch and extract content from'
+                    }
+                },
+                'required': ['url']
+            }
+        }
     }
 ]
 
 
 def web_search(query):
-    """Search the internet using DuckDuckGo (ddgs)"""
+    """Search the internet using DuckDuckGo (ddgs) and fetch full article content"""
     try:
         from ddgs import DDGS
 
@@ -400,9 +437,51 @@ def web_search(query):
                     'url': r.get('href', ''),
                     'snippet': r.get('body', '')[:300]
                 })
+            
+            # Auto-fetch full content from top 3 results
+            for i in range(min(3, len(results))):
+                article = fetch_article(results[i]['url'])
+                if 'content' in article and article['content']:
+                    results[i]['full_content'] = article['content'][:2000]
+            
             return results
     except Exception as e:
         return [{'error': str(e)}]
+
+
+def fetch_article(url):
+    """Fetch and extract text content from a web article URL"""
+    try:
+        import urllib.request
+        import html as html_mod
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        html_content = resp.read().decode("utf-8", errors="ignore")
+        # Remove scripts, styles, nav, header, footer
+        for t in ["script", "style", "nav", "header", "footer", "aside", "noscript"]:
+            html_content = re.sub(f"<{t}[^>]*>.*?</{t}>", "", html_content, flags=re.DOTALL|re.IGNORECASE)
+        # Extract paragraphs
+        paragraphs = re.findall(r"<p[^>]*>(.*?)</p>", html_content, re.DOTALL|re.IGNORECASE)
+        lines = []
+        for p in paragraphs:
+            clean = re.sub(r"<[^>]+>", "", p).strip()
+            clean = html_mod.unescape(clean)
+            if len(clean) > 50:
+                lines.append(clean)
+        text = "\n".join(lines)
+        if not text:
+            # Fallback: extract all text from body
+            body = re.search(r"<body[^>]*>(.*?)</body>", html_content, re.DOTALL|re.IGNORECASE)
+            if body:
+                text = html_mod.unescape(re.sub(r"<[^>]+>", " ", body.group(1)))
+                text = re.sub(r"\s+", " ", text).strip()[:3000]
+        else:
+            text = text[:3000]
+        if text:
+            return {'url': url, 'content': text}
+        return {'url': url, 'error': 'Could not extract content'}
+    except Exception as e:
+        return {'url': url, 'error': str(e)}
 
 
 def save_session(session_id, data):
@@ -589,6 +668,27 @@ def api_session_delete():
     filepath = os.path.join(SESSIONS_DIR, f"{session_id}.json")
     if os.path.exists(filepath):
         os.remove(filepath)
+        return jsonify({'success': True})
+
+    return jsonify({'error': 'Session not found'})
+
+@app.route('/api/session/rename', methods=['POST'])
+def api_session_rename():
+    """API to rename a session"""
+    data = request.json
+    session_id = data.get('session_id', '')
+    new_title = data.get('title', '')
+
+    if not new_title:
+        return jsonify({'error': 'Title cannot be empty'})
+
+    filepath = os.path.join(SESSIONS_DIR, f"{session_id}.json")
+    if os.path.exists(filepath):
+        with open(filepath, 'r') as f:
+            session_data = json.load(f)
+        session_data['title'] = new_title
+        with open(filepath, 'w') as f:
+            json.dump(session_data, f, indent=2)
         return jsonify({'success': True})
 
     return jsonify({'error': 'Session not found'})

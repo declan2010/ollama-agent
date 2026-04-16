@@ -734,7 +734,7 @@
                 const percentage = Math.round((currentTokens / maxTokens) * 100);
                 contextText.textContent = `Context: ${currentTokens} / ${maxTokens} (${percentage}%)`;
 
-                // Change color based on usage
+                // Cambiar color según uso
                 contextIndicator.classList.remove('warning', 'danger');
                 if (percentage >= 90) {
                     contextIndicator.classList.add('danger');
@@ -852,7 +852,11 @@
         async function deleteChat(sessionId) {
             if (confirm('Delete this chat?')) {
                 try {
-                    const response = await fetch(`/api/delete-session/${sessionId}`, { method: 'DELETE' });
+                    const response = await fetch('/api/session/delete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: sessionId })
+                    });
                     const data = await response.json();
 
                     if (data.success) {
@@ -861,9 +865,12 @@
                         } else {
                             loadSessions();
                         }
+                    } else {
+                        alert('Error: ' + (data.error || 'Could not delete'));
                     }
                 } catch (error) {
                     console.error('Error deleting session:', error);
+                    alert('Error deleting session');
                 }
             }
         }
@@ -879,16 +886,16 @@
             }
 
             try {
-                const response = await fetch(`/api/rename-session/${sessionId}`, {
-                    method: 'PUT',
+                const response = await fetch('/api/session/rename', {
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: trimmed })
+                    body: JSON.stringify({ session_id: sessionId, title: trimmed })
                 });
                 const data = await response.json();
 
                 if (data.success) {
                     loadSessions();
-                    // If it's the current session, update the title in the header
+                    // Si es la sesión actual, actualizar el título en el header
                     if (sessionId === currentSessionId) {
                         const titleEl = document.getElementById('sessionTitle');
                         if (titleEl) titleEl.textContent = trimmed;
@@ -903,12 +910,12 @@
 
         async function newChat() {
             try {
-                const response = await fetch('/api/new-chat', { method: 'POST' });
+                const response = await fetch('/api/session/new', { method: 'POST' });
                 const data = await response.json();
 
                 currentSessionId = data.session_id;
 
-                // Clear chat area
+                // Limpiar área de chat
                 chatArea.innerHTML = `
                     <div class="welcome-message">
                         <h2>New Conversation</h2>
@@ -936,7 +943,7 @@
 
                 currentSessionId = sessionId;
 
-                // Update session models
+                // Actualizar modelos de la sesión
                 if (data.model) modelSelect.value = data.model;
                 if (data.fallback_model && fallbackModelSelect) {
                     fallbackModelSelect.value = data.fallback_model;

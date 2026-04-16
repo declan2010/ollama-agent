@@ -263,6 +263,20 @@
             color: var(--accent);
         }
 
+        .donate-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 50%;
+            transition: background 0.2s, color 0.2s;
+            font-size: 1.1rem;
+        }
+
+        .donate-btn:hover {
+            background: #0040dd30;
+        }
+
         .chat-area {
             flex: 1;
             overflow-y: auto;
@@ -622,6 +636,7 @@
                     <span id="contextText">Context: 0 tokens</span>
                 </div>
             </div>
+            <button class="donate-btn" onclick="window.open('https://www.paypal.com/donate/?hosted_button_id=P3TK84JYLNUU6', '_blank')" title="Donate">💜</button>
             <button class="settings-btn" onclick="openSettings()" title="Settings">⚙️</button>
         </div>
 
@@ -837,7 +852,11 @@
         async function deleteChat(sessionId) {
             if (confirm('Delete this chat?')) {
                 try {
-                    const response = await fetch(`/api/delete-session/${sessionId}`, { method: 'DELETE' });
+                    const response = await fetch('/api/session/delete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: sessionId })
+                    });
                     const data = await response.json();
 
                     if (data.success) {
@@ -846,9 +865,12 @@
                         } else {
                             loadSessions();
                         }
+                    } else {
+                        alert('Error: ' + (data.error || 'Could not delete'));
                     }
                 } catch (error) {
                     console.error('Error deleting session:', error);
+                    alert('Error deleting session');
                 }
             }
         }
@@ -864,10 +886,10 @@
             }
 
             try {
-                const response = await fetch(`/api/rename-session/${sessionId}`, {
-                    method: 'PUT',
+                const response = await fetch('/api/session/rename', {
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: trimmed })
+                    body: JSON.stringify({ session_id: sessionId, title: trimmed })
                 });
                 const data = await response.json();
 
@@ -888,7 +910,7 @@
 
         async function newChat() {
             try {
-                const response = await fetch('/api/new-chat', { method: 'POST' });
+                const response = await fetch('/api/session/new', { method: 'POST' });
                 const data = await response.json();
 
                 currentSessionId = data.session_id;
