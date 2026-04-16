@@ -895,7 +895,7 @@
 
                 if (data.success) {
                     loadSessions();
-                    // Si es la sesión actual, actualizar el título en el header
+                    // If it's the current session, update the title in the header
                     if (sessionId === currentSessionId) {
                         const titleEl = document.getElementById('sessionTitle');
                         if (titleEl) titleEl.textContent = trimmed;

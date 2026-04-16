@@ -14,7 +14,7 @@ app = Flask(__name__)
 app.secret_key = 'ollama-chat-secret-key-2024'
 SESSIONS_DIR = 'sessions'
 
-# Crear directorio sessions si no existe
+# Create sessions directory if it does not exist
 if not os.path.exists(SESSIONS_DIR):
     os.makedirs(SESSIONS_DIR)
 
