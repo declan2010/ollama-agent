@@ -641,9 +641,14 @@ def api_chat():
     # Save session
     save_session(session['chat_id'], session_data)
 
+    # Estimate context usage (rough: ~4 chars per token)
+    total_chars = sum(len(m.get('content', '')) for m in session_data['messages'])
+    estimated_tokens = total_chars // 4
+
     return jsonify({
         'response': response_text,
-        'session_id': session['chat_id']
+        'session_id': session['chat_id'],
+        'context_usage': estimated_tokens
     })
 
 @app.route('/api/sessions')
