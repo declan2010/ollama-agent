@@ -702,10 +702,13 @@ def api_chat_stream():
                             followup_result = send_to_ollama(model, followup_messages, OLLAMA_TOOLS, stream=False)
                             if 'error' in followup_result:
                                 full_response = f"Error: {followup_result['error']}"
+                                yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                             else:
                                 followup_content = followup_result.get('message', {}).get('content', '')
                                 if followup_content:
                                     full_response = followup_content
+                                    # Stream the follow-up response to the client
+                                    yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                                 prompt_tokens = followup_result.get('prompt_eval_count', prompt_tokens)
                         break
 
