@@ -698,18 +698,75 @@ def api_chat_stream():
                             for tr in tool_results:
                                 followup_messages.append({'role': tr['role'], 'content': tr['content']})
 
-                            # Make non-streaming follow-up request
-                            followup_result = send_to_ollama(model, followup_messages, OLLAMA_TOOLS, stream=False)
-                            if 'error' in followup_result:
-                                full_response = f"Error: {followup_result['error']}"
-                                yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
-                            else:
-                                followup_content = followup_result.get('message', {}).get('content', '')
+                            # Make follow-up request(s) with tool results
+                            # May need multiple rounds if model keeps calling tools
+                            max_followup_rounds = 3
+                            for round_num in range(max_followup_rounds):
+                                logger.info("Follow-up round %d: sending %d tool results back to %s", round_num + 1, len(tool_results), model)
+                                followup_result = send_to_ollama(model, followup_messages, OLLAMA_TOOLS, stream=False)
+                                logger.info("Follow-up response: content_len=%d, has_tool_calls=%s", len(followup_result.get('message', {}).get('content', '')), bool(followup_result.get('message', {}).get('tool_calls')))
+
+                                if 'error' in followup_result:
+                                    full_response = f"Error: {followup_result['error']}"
+                                    logger.error("Follow-up error: %s", full_response)
+                                    yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                    break
+
+                                followup_msg = followup_result.get('message', {})
+                                followup_content = followup_msg.get('content', '')
+                                followup_tool_calls = followup_msg.get('tool_calls', [])
+
                                 if followup_content:
                                     full_response = followup_content
-                                    # Stream the follow-up response to the client
                                     yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
-                                prompt_tokens = followup_result.get('prompt_eval_count', prompt_tokens)
+                                    prompt_tokens = followup_result.get('prompt_eval_count', prompt_tokens)
+                                    break  # Got a text response, done
+
+                                elif followup_tool_calls:
+                                    # Model wants more tool calls - execute them
+                                    logger.info("Follow-up round %d: model requested %d more tool calls", round_num + 1, len(followup_tool_calls))
+                                    # Add assistant message with tool calls to history
+                                    followup_messages.append({'role': 'assistant', 'content': '', 'tool_calls': followup_tool_calls})
+                                    for tc in followup_tool_calls:
+                                        tc_name = tc.get('function', {}).get('name', '')
+                                        tc_args = tc.get('function', {}).get('arguments', {})
+                                        tc_id = tc.get('id', f'tool_{round_num}_{len(followup_tool_calls)}')
+                                        logger.info("Follow-up tool call: %s(%s)", tc_name, json.dumps(tc_args))
+                                        if tc_name == 'web_search':
+                                            q = tc_args.get('query', '')
+                                            results = web_search(q)
+                                            if results and isinstance(results, list) and 'error' in results[0]:
+                                                tr_content = f"Search error: {results[0]['error']}"
+                                            else:
+                                                tr_content = "Search results:\n\n"
+                                                for idx, r in enumerate(results[:5], 1):
+                                                    tr_content += f"{idx}. {r['title']}\n   URL: {r['url']}\n   {r['snippet']}\n\n"
+                                            followup_messages.append({'role': 'tool', 'content': tr_content, 'tool_call_id': tc_id})
+                                        elif tc_name == 'fetch_article':
+                                            url = tc_args.get('url', '')
+                                            article = fetch_article(url)
+                                            if 'content' in article:
+                                                tr_content = f"Article from {url}:\n\n{article['content']}"
+                                            else:
+                                                tr_content = f"Could not fetch article from {url}: {article.get('error', 'Unknown error')}"
+                                            followup_messages.append({'role': 'tool', 'content': tr_content, 'tool_call_id': tc_id})
+                                        elif tc_name == 'local_command':
+                                            cmd = tc_args.get('command', '')
+                                            tr_content = execute_local_command(cmd)
+                                            followup_messages.append({'role': 'tool', 'content': tr_content, 'tool_call_id': tc_id})
+                                        else:
+                                            followup_messages.append({'role': 'tool', 'content': f'Unknown tool: {tc_name}', 'tool_call_id': tc_id})
+                                    # Continue loop to send tool results back
+                                    continue
+                                else:
+                                    # No content and no tool calls - empty response
+                                    full_response = "(No response from model)"
+                                    yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                    break
+                            else:
+                                # Max rounds reached
+                                full_response = "(Maximum tool call rounds reached)"
+                                yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                         break
 
                     msg = chunk.get('message', {})
