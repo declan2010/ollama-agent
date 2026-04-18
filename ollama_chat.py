@@ -215,13 +215,31 @@ def is_dangerous(cmd):
 
 # --- Ollama Communication ---
 def get_ollama_models():
-    """Get list of available models"""
+    """Get list of available models. If empty, pull llama3.2:1b as fallback."""
     try:
         import urllib.request
         req = urllib.request.Request(f'{OLLAMA_BASE_URL}/api/tags')
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read())
-            return [m['name'] for m in data.get('models', [])]
+            models = [m['name'] for m in data.get('models', [])]
+            if not models:
+                logger.info("No models found, pulling llama3.2:1b as fallback...")
+                try:
+                    pull_req = urllib.request.Request(
+                        f'{OLLAMA_BASE_URL}/api/pull',
+                        data=json.dumps({"name": "llama3.2:1b", "stream": False}).encode(),
+                        headers={"Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(pull_req, timeout=300) as pull_resp:
+                        pull_data = json.loads(pull_resp.read())
+                        logger.info("Pulled llama3.2:1b: %s", pull_data.get('status', 'done'))
+                    # Refresh model list
+                    with urllib.request.urlopen(req, timeout=5) as response2:
+                        data2 = json.loads(response2.read())
+                        models = [m['name'] for m in data2.get('models', [])]
+                except Exception as pull_err:
+                    logger.error("Failed to pull fallback model: %s", pull_err)
+            return models
     except Exception as e:
         logger.error("Failed to get models: %s", e)
         return []
