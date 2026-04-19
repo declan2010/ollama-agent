@@ -845,8 +845,10 @@ def api_chat_stream():
                         # (models sometimes emit tool names as text before the formal tool call)
                         if not tool_calls_buffer:
                             # Filter out tool call artifacts that some models emit as text
+                            # Matches patterns like "model:tool_call" or "model:tool_call\nextra text"
                             import re
-                            if re.match(r'^[\w.-]+:tool_call\s*$', content.strip()):
+                            stripped = content.strip()
+                            if re.match(r'^[\w.-]+:tool_call', stripped):
                                 full_response += ''
                                 continue
                             full_response += content
