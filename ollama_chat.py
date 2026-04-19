@@ -693,7 +693,6 @@ def index():
     sessions = list_sessions()
 
     if 'chat_id' not in session:
-        import uuid
         session['chat_id'] = str(uuid.uuid4())[:8]
         session['model'] = models[0] if models else 'llama3'
 
@@ -756,7 +755,6 @@ def api_chat_stream():
 
     # Create/load session (streaming endpoint)
     if 'chat_id' not in session:
-        import uuid
         session['chat_id'] = str(uuid.uuid4())[:8]
 
     session['model'] = model
@@ -1217,7 +1215,6 @@ def api_chat():
         return jsonify({'error': 'Rate limit exceeded. Please wait a moment.'}), 429
 
     if 'chat_id' not in session:
-        import uuid
         session['chat_id'] = str(uuid.uuid4())[:8]
 
     session['model'] = model
@@ -1373,7 +1370,6 @@ def api_session_save():
 @app.route('/api/session/new', methods=['POST'])
 def api_session_new():
     """API to create a new session"""
-    import uuid
     session['chat_id'] = str(uuid.uuid4())[:8]
 
     # Reset write permission for new session
