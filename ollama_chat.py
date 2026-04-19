@@ -86,7 +86,7 @@ def is_sensitive_path(filepath):
 # --- Write commands (require user permission) ---
 WRITE_COMMANDS = {
     'touch', 'mkdir', 'rm', 'cp', 'mv', 'nano', 'vim',
-    'chmod', 'chown', 'echo', 'printf', 'dd', 'tee',
+    'chmod', 'chown', 'dd', 'tee',
     'ln', 'unlink', 'rename', 'truncate', 'fallocate'
 }
 
@@ -220,17 +220,20 @@ def is_write_command(cmd):
         return False
     parts = cmd.split()
     base = parts[0]
+    # Handle shell redirections first (echo > file, printf >> file)
+    if '>' in cmd or '>>' in cmd:
+        return True
+    # Handle tee usage (piped writes)
+    if '| tee' in cmd or '|tee' in cmd:
+        return True
+    # echo/printf without redirection are NOT write commands
+    if base in ('echo', 'printf'):
+        return False  # Only write if redirected (caught above)
     # Direct write commands
     if base in WRITE_COMMANDS:
         return True
     # Handle sudo + write command
     if base == 'sudo' and len(parts) > 1 and parts[1] in WRITE_COMMANDS:
-        return True
-    # Handle shell redirections (echo >, printf >, etc.)
-    if '>' in cmd or '>>' in cmd:
-        return True
-    # Handle tee usage (piped writes)
-    if '| tee' in cmd or '|tee' in cmd:
         return True
     return False
 
