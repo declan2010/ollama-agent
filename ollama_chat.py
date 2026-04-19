@@ -739,13 +739,36 @@ def api_chat_stream():
                                 followup_content = followup_msg.get('content', '')
                                 followup_tool_calls = followup_msg.get('tool_calls', [])
 
-                                if followup_content:
+                                # If model gives both content and tool calls, prefer content
+                                if followup_content and not followup_tool_calls:
                                     full_response = followup_content
                                     yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                                     prompt_tokens = followup_result.get('prompt_eval_count', prompt_tokens)
                                     break  # Got a text response, done
+                                elif followup_content and followup_tool_calls:
+                                    # Model has partial content but wants more tools
+                                    # Send what we have and force a complete response with tool results
+                                    logger.info("Model has partial content (%d chars) + tool calls, forcing final response", len(followup_content))
+                                    tool_summaries = []
+                                    for m in followup_messages:
+                                        if m.get('role') == 'tool' and m.get('content'):
+                                            tool_summaries.append(m['content'])
+                                    context_hint = ''
+                                    if tool_summaries:
+                                        context_hint = f'\n\nHere are the search results I found:\n"""\n{"---".join(tool_summaries)}\n"""\n\nPlease provide a complete answer based on this information.'
+                                    followup_messages.append({'role': 'assistant', 'content': followup_content})
+                                    final_result = send_to_ollama(model, followup_messages, None, stream=False)
+                                    final_content = final_result.get('message', {}).get('content', '')
+                                    if final_content:
+                                        full_response = final_content
+                                        yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                        prompt_tokens = final_result.get('prompt_eval_count', prompt_tokens)
+                                    break
 
                                 elif followup_tool_calls and tools_for_this_round is not None:
+                                    if full_response:
+                                        # Already have some content from earlier, send it
+                                        pass
                                     # Model wants more tool calls - execute them
                                     logger.info("Follow-up round %d: model requested %d more tool calls", round_num + 1, len(followup_tool_calls))
                                     # Add assistant message with tool calls to history
