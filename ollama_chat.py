@@ -796,6 +796,11 @@ def api_chat_stream():
         try:
             # Prepare messages for Ollama (strip timestamps for API)
             api_messages = []
+            # Add system message to inform about available tools
+            api_messages.append({
+                'role': 'system',
+                'content': 'You have access to the following tools: local_command (execute system commands, both read and write), web_search (search the internet), fetch_article (read web pages). When asked to create, write, or modify files, USE the local_command tool with appropriate shell commands (e.g., cat > filename, touch, mkdir, cp, mv, etc.). Do NOT say you cannot write files - you CAN write files using local_command. For write operations, the user will be prompted for confirmation.'
+            })
             for msg in session_data['messages']:
                 api_messages.append({
                     'role': msg['role'],
