@@ -1418,6 +1418,8 @@
                                 if (data.context_usage !== undefined) {
                                     updateContextIndicator(data.context_usage);
                                 }
+                                // Update model status after response (model is now loaded)
+                                checkModelStatus();
                             }
                         } catch (parseErr) {
                             // Skip unparseable lines
@@ -1483,6 +1485,8 @@
                     if (data.context_usage !== undefined) {
                         updateContextIndicator(data.context_usage);
                     }
+                    // Update model status after response (model is now loaded)
+                    checkModelStatus();
                 }
 
                 loadSessions();
