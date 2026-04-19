@@ -888,6 +888,31 @@
         </div>
     </div>
 
+    <!-- Write Permission Modal -->
+    <div class="modal-overlay" id="writePermissionModal">
+        <div class="modal" style="min-width: 400px;">
+            <div class="modal-header">
+                <h2>\u26a0\ufe0f Write Permission Required</h2>
+            </div>
+            <div style="padding: 15px 0;">
+                <p style="color: var(--text-primary); margin-bottom: 8px;">The assistant wants to run:</p>
+                <pre id="writePermissionCommand" style="background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; font-family: 'Courier New', monospace; font-size: 0.9rem; color: var(--accent); margin-bottom: 20px;"></pre>
+                <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 20px;">This command will modify files or system state.</p>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <button onclick="handleWritePermission('session')" style="background: #22c55e; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: bold;">
+                        \u2705 Acceso total en esta conversaci\u00f3n
+                    </button>
+                    <button onclick="handleWritePermission('once')" style="background: #f59e0b; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: bold;">
+                        \u21aa Solo esta vez
+                    </button>
+                    <button onclick="handleWritePermission('deny')" style="background: #ef4444; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: bold;">
+                        \u274c Denegar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         let currentSessionId = '{{ session.get("chat_id", "") }}';
         let isWaiting = false;
@@ -1080,6 +1105,40 @@
             document.getElementById('settingsModal').classList.remove('active');
         }
 
+        // Write permission modal functions
+        let pendingWritePermission = { command: '', sessionId: '', permId: '' };
+
+        function showWritePermissionModal(command, sessionId, permId) {
+            pendingWritePermission = { command: command, sessionId: sessionId, permId: permId };
+            document.getElementById('writePermissionCommand').textContent = command;
+            document.getElementById('writePermissionModal').classList.add('active');
+        }
+
+        async function handleWritePermission(action) {
+            const { command, sessionId, permId } = pendingWritePermission;
+            document.getElementById('writePermissionModal').classList.remove('active');
+
+            try {
+                await fetch('/api/write-permission', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        command: command,
+                        action: action,
+                        perm_id: permId
+                    })
+                });
+            } catch (error) {
+                console.error('Error sending write permission:', error);
+            }
+        }
+
+        // Close write permission modal on outside click
+        document.getElementById('writePermissionModal').addEventListener('click', function(e) {
+            // Don't close on outside click - user must choose an option
+        });
+
         async function clearAllChats() {
             if (confirm('Are you sure you want to delete ALL chats? This cannot be undone.')) {
                 try {
@@ -1220,6 +1279,8 @@
         }
 
         async function newChat() {
+            // Close any open write permission modal
+            document.getElementById('writePermissionModal').classList.remove('active');
             try {
                 const response = await fetch('/api/session/new', { method: 'POST' });
                 const data = await response.json();
@@ -1243,6 +1304,8 @@
         }
 
         async function switchSession(sessionId) {
+            // Close any open write permission modal
+            document.getElementById('writePermissionModal').classList.remove('active');
             try {
                 // Sync server-side session first
                 await fetch('/api/session/switch', {
@@ -1273,6 +1336,9 @@
                 if (data.fallback_model && fallbackModelSelect) {
                     fallbackModelSelect.value = data.fallback_model;
                 }
+
+                // Dismiss any pending write permission modal
+                document.getElementById('writePermissionModal').classList.remove('active');
 
                 chatArea.innerHTML = '';
 
@@ -1408,6 +1474,9 @@
                                     addCopyButtons(contentEl);
                                     chatArea.scrollTop = chatArea.scrollHeight;
                                 }
+                            } else if (data.type === 'write_permission_required') {
+                                // Show write permission modal
+                                showWritePermissionModal(data.command, data.session_id, data.perm_id || '');
                             } else if (data.type === 'error') {
                                 fullResponse += `\n\n**Error:** ${data.content}`;
                                 if (contentEl) {

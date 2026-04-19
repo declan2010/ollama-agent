@@ -6,6 +6,8 @@ Allows chatting with local models, selecting models, and saving sessions.
 import json
 import logging
 import os
+import queue
+import uuid
 import re
 import time
 from collections import defaultdict
@@ -81,6 +83,23 @@ def is_sensitive_path(filepath):
 
 
 # --- Allowed commands (whitelist approach) ---
+# --- Write commands (require user permission) ---
+WRITE_COMMANDS = {
+    'touch', 'mkdir', 'rm', 'cp', 'mv', 'nano', 'vim',
+    'chmod', 'chown', 'echo', 'printf', 'dd', 'tee',
+    'ln', 'unlink', 'rename', 'truncate', 'fallocate'
+}
+
+# --- Permission queues: session_id -> queue.Queue ---
+# Permission queues: permission_id -> queue.Queue()
+_write_permission_queues = {}
+
+# Pending permissions: perm_id -> {session_id, command, q}
+_pending_permissions = {}
+
+# --- Per-session write permission state: session_id -> 'none'|'once'|'session' ---
+_session_write_permissions = {}
+
 SAFE_COMMANDS = {
     'ls': {'flags': {'-l', '-a', '-la', '-al', '-lh', '-lah', '-R', '-1'},
             'allow_args': False},
@@ -194,23 +213,127 @@ def execute_local_command(cmd):
         return f"[Error] {str(e)}"
 
 
-# Dangerous command patterns (still used as a secondary check)
-BLOCKED_PATTERNS = [
-    r'\b(rm|del|delete|rm -rf|mkfs|dd|wipe|destroy|supprimer|entfernen|eliminare)\b',
-    r'\b(sudo|su|chmod 777|chown)\b',
-    r'\b(wget|curl.*\|.*sh|bash.*http)\b',
-    r'\b(mkdir /|touch /|echo > /)\b',
-    r'\b(ssh|scp|rsync)\b',
-    r'\b(sql|nmap|nikto|hydra)\b',
-]
+def is_write_command(cmd):
+    """Check if a command involves write operations."""
+    cmd = cmd.strip()
+    if not cmd:
+        return False
+    parts = cmd.split()
+    base = parts[0]
+    # Direct write commands
+    if base in WRITE_COMMANDS:
+        return True
+    # Handle sudo + write command
+    if base == 'sudo' and len(parts) > 1 and parts[1] in WRITE_COMMANDS:
+        return True
+    # Handle shell redirections (echo >, printf >, etc.)
+    if '>' in cmd or '>>' in cmd:
+        return True
+    # Handle tee usage (piped writes)
+    if '| tee' in cmd or '|tee' in cmd:
+        return True
+    return False
+
+
+def check_write_permission(cmd, session_id):
+    """Check if a write command is allowed for this session.
+    Returns 'allowed' if the command can proceed, or 'ask' if permission is needed."""
+    perm = _session_write_permissions.get(session_id, 'none')
+    if perm == 'session':
+        return 'allowed'
+    elif perm == 'once':
+        # Allow once, then reset
+        _session_write_permissions[session_id] = 'none'
+        return 'allowed'
+    else:
+        return 'ask'
+
+
+def execute_write_command(cmd, session_id):
+    """Execute a write command after permission is granted.
+    Returns the command output or permission-denied message."""
+    import subprocess as sp
+
+    try:
+        cmd = cmd.strip()
+        if not cmd:
+            return "[Error] Empty command"
+
+        # For write commands, we execute with shell=True but with basic safety
+        # (the permission system is the safety gate)
+        # Still block truly catastrophic patterns
+        catastrophic = ['rm -rf /', 'mkfs', 'dd if=/dev/zero of=/dev/']
+        for pattern in catastrophic:
+            if pattern in cmd:
+                return "[Security] This command is blocked for safety."
+
+        result = sp.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=os.path.expanduser('~')
+        )
+
+        output = result.stdout.strip() or result.stderr.strip() or "Command executed successfully (no output)"
+        logger.info("Executed write command (session=%s): %s", session_id, cmd)
+        return output[:5000]
+
+    except sp.TimeoutExpired:
+        return "[Timeout] Command took too long (>30s)"
+    except Exception as e:
+        logger.error("Write command execution error: %s", e)
+        return f"[Error] {str(e)}"
 
 
 def is_dangerous(cmd):
-    """Check if the command is dangerous"""
-    for pattern in BLOCKED_PATTERNS:
+    """Check if the command is dangerous. Write commands are handled by the permission system."""
+    # Don't block write commands here - they're handled by write_permission
+    # Only block truly catastrophic patterns
+    catastrophic_patterns = [
+        r'rm\s+-rf\s+/',
+        r'mkfs',
+        r'dd\s+if=/dev/zero\s+of=/dev/',
+        r'wget.*\|.*sh',
+        r'bash.*http',
+        r'curl.*\|.*sh',
+    ]
+    for pattern in catastrophic_patterns:
         if re.search(pattern, cmd, re.IGNORECASE):
             return True
     return False
+
+
+# --- Write Permission Endpoint ---
+@app.route('/api/write-permission', methods=['POST'])
+def api_write_permission():
+    """Handle write permission responses from the frontend.
+    Body: {perm_id, action: 'deny'|'once'|'session', session_id, command}"""
+    data = request.json
+    perm_id = data.get('perm_id', '')
+    action = data.get('action', 'deny')
+    session_id = data.get('session_id', '')
+
+    logger.info("Write permission response: perm_id=%s, action=%s, session=%s", perm_id, action, session_id)
+
+    # Signal the specific pending permission
+    if perm_id and perm_id in _pending_permissions:
+        pending = _pending_permissions[perm_id]
+        pending['q'].put(action)
+        return jsonify({'success': True})
+
+    # Fallback: signal session-level queue (old behavior)
+    if session_id:
+        if action in ('once', 'session'):
+            _session_write_permissions[session_id] = action
+        else:
+            _session_write_permissions[session_id] = 'none'
+        q = _write_permission_queues.get(session_id)
+        if q:
+            q.put(action)
+
+    return jsonify({'success': True})
 
 
 # --- Ollama Communication ---
@@ -344,7 +467,11 @@ def process_ollama_response(model, messages, tools=None):
 
             if func_name == 'local_command':
                 cmd = func_args.get('command', '')
-                result = execute_local_command(cmd)
+                # Check if this is a write command
+                if is_write_command(cmd):
+                    result = "[Security] Write commands require streaming mode for permission confirmation. Please retry in streaming mode."
+                else:
+                    result = execute_local_command(cmd)
                 tool_results.append({
                     'role': 'tool',
                     'content': result,
@@ -406,13 +533,13 @@ OLLAMA_TOOLS = [
         'type': 'function',
         'function': {
             'name': 'local_command',
-            'description': 'Execute a read-only local system command. Only use for: listing files, checking disk space, viewing memory, system info, network status, user info. NEVER use for: rm, del, sudo, chmod, dd, mkfs, or any write/modify/destructive operations.',
+            'description': 'Execute a local system command. Supports both read-only commands (ls, cat, find, grep, df, free, etc. - execute without confirmation) and write commands (touch, mkdir, rm, cp, mv, chmod, etc. - require user confirmation via popup). Write operations will pause and ask the user for permission before executing.',
             'parameters': {
                 'type': 'object',
                 'properties': {
                     'command': {
                         'type': 'string',
-                        'description': 'The command to execute. Examples: "ls -la", "df -h", "free -h", "uname -a", "pwd", "whoami", "uptime", "hostname"'
+                        'description': 'The command to execute. Read-only examples: "ls -la", "df -h", "free -h", "uname -a", "pwd", "whoami", "uptime", "hostname". Write examples (require confirmation): "mkdir /tmp/test", "touch /tmp/file", "cp file1 file2"'
                     }
                 },
                 'required': ['command']
@@ -704,17 +831,85 @@ def api_chat_stream():
 
                         # If we have pending tool calls, process them
                         if tool_calls_buffer:
-                            # Process tool calls synchronously
+                            # Pre-process write commands: check permissions via SSE
+                            write_cmd_indices = []
+                            for i_t, tc in enumerate(tool_calls_buffer):
+                                tc_name = tc.get('function', {}).get('name', '')
+                                tc_args = tc.get('function', {}).get('arguments', {})
+                                if tc_name == 'local_command':
+                                    cmd = tc_args.get('command', '')
+                                    if is_write_command(cmd):
+                                        perm = check_write_permission(cmd, current_chat_id)
+                                        if perm == 'ask':
+                                            write_cmd_indices.append((i_t, cmd))
+
+                            # Collect write commands that need permission
+                            write_cmds_to_request = []
+                            for i_t, tc in enumerate(tool_calls_buffer):
+                                tc_name = tc.get('function', {}).get('name', '')
+                                tc_args = tc.get('function', {}).get('arguments', {})
+                                if tc_name == 'local_command':
+                                    cmd = tc_args.get('command', '')
+                                    if is_write_command(cmd):
+                                        perm = check_write_permission(cmd, current_chat_id)
+                                        if perm == 'ask':
+                                            # Assign unique permission ID
+                                            perm_id = str(uuid.uuid4())
+                                            write_cmds_to_request.append({'idx': i_t, 'cmd': cmd, 'perm_id': perm_id})
+                                            _pending_permissions[perm_id] = {
+                                                'session_id': current_chat_id,
+                                                'command': cmd,
+                                                'q': queue.Queue()
+                                            }
+
+                            # If there are write commands needing permission, ask for ALL at once
+                            if write_cmds_to_request:
+                                for item in write_cmds_to_request:
+                                    yield f"data: {json.dumps({'type': 'write_permission_required', 'command': item['cmd'], 'session_id': current_chat_id, 'perm_id': item['perm_id']})}\n\n"
+                                # Wait for ALL permission responses (they come async from frontend)
+                                actions = {}
+                                for item in write_cmds_to_request:
+                                    perm_id = item['perm_id']
+                                    action = _pending_permissions[perm_id]['q'].get()  # blocks
+                                    actions[perm_id] = action
+                                    del _pending_permissions[perm_id]
+
+                                # Apply all permission actions
+                                for item in write_cmds_to_request:
+                                    perm_id = item['perm_id']
+                                    action = actions.get(perm_id, 'deny')
+                                    tc = tool_calls_buffer[item['idx']]
+                                    if action == 'deny':
+                                        tc['_write_denied'] = True
+                                        logger.info("Write command denied by user: %s", item['cmd'])
+                                    elif action == 'once':
+                                        # Mark for execution (will be executed below)
+                                        tc['_write_action'] = 'once'
+                                        logger.info("Write command allowed once: %s", item['cmd'])
+                                    elif action == 'session':
+                                        _session_write_permissions[current_chat_id] = 'session'
+                                        tc['_write_action'] = 'session'
+                                        logger.info("Write command allowed for session: %s", item['cmd'])
+
+                                # After 'once' permission, reset to 'none' so next write asks again
+                                if any(a == 'once' for a in actions.values()):
+                                    _session_write_permissions[current_chat_id] = 'none'
+
+                            # Process tool calls - now with write permission resolved
                             tool_results = _process_tool_calls_streaming(
                                 model, session_data, tool_calls_buffer,
-                                full_response, prompt_tokens
+                                full_response, prompt_tokens, current_chat_id
                             )
                             # Send tool results back to Ollama for final response
                             followup_messages = []
                             for msg in session_data['messages']:
                                 followup_messages.append({'role': msg['role'], 'content': msg['content']})
-                            # Add assistant message with tool calls
-                            followup_messages.append({'role': 'assistant', 'content': full_response or '', 'tool_calls': tool_calls_buffer})
+                            # Add assistant message with tool calls (strip internal flags first)
+                            clean_tool_calls = []
+                            for tc in tool_calls_buffer:
+                                clean_tc = {k: v for k, v in tc.items() if k != '_write_denied'}
+                                clean_tool_calls.append(clean_tc)
+                            followup_messages.append({'role': 'assistant', 'content': full_response or '', 'tool_calls': clean_tool_calls})
                             # Add tool results
                             for tr in tool_results:
                                 followup_messages.append({'role': tr['role'], 'content': tr['content']})
@@ -798,7 +993,34 @@ def api_chat_stream():
                                             followup_messages.append({'role': 'tool', 'content': tr_content, 'tool_call_id': tc_id})
                                         elif tc_name == 'local_command':
                                             cmd = tc_args.get('command', '')
-                                            tr_content = execute_local_command(cmd)
+                                            if is_write_command(cmd):
+                                                perm = check_write_permission(cmd, current_chat_id)
+                                                if perm == 'ask':
+                                                    perm_id = str(uuid.uuid4())
+                                                    q = queue.Queue()
+                                                    _pending_permissions[perm_id] = {
+                                                        'session_id': current_chat_id,
+                                                        'command': cmd,
+                                                        'q': q
+                                                    }
+                                                    yield f"data: {json.dumps({'type': 'write_permission_required', 'command': cmd, 'session_id': current_chat_id, 'perm_id': perm_id})}\n\n"
+                                                    action = q.get()  # blocks until frontend responds
+                                                    del _pending_permissions[perm_id]
+                                                    if action == 'deny':
+                                                        tr_content = "[Permission denied] Task cancelled"
+                                                    elif action == 'once':
+                                                        _session_write_permissions[current_chat_id] = 'none'
+                                                        tr_content = execute_write_command(cmd, current_chat_id)
+                                                    elif action == 'session':
+                                                        _session_write_permissions[current_chat_id] = 'session'
+                                                        tr_content = execute_write_command(cmd, current_chat_id)
+                                                    else:
+                                                        tr_content = "[Permission denied] Task cancelled"
+                                                else:
+                                                    # perm == 'allowed', already approved
+                                                    tr_content = execute_write_command(cmd, current_chat_id)
+                                            else:
+                                                tr_content = execute_local_command(cmd)
                                             followup_messages.append({'role': 'tool', 'content': tr_content, 'tool_call_id': tc_id})
                                         else:
                                             followup_messages.append({'role': 'tool', 'content': f'Unknown tool: {tc_name}', 'tool_call_id': tc_id})
@@ -930,7 +1152,7 @@ def api_chat_stream():
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
-def _process_tool_calls_streaming(model, session_data, tool_calls, current_content, prompt_tokens):
+def _process_tool_calls_streaming(model, session_data, tool_calls, current_content, prompt_tokens, current_chat_id=''):
     """Process tool calls from streaming - used internally"""
     # This is called after streaming completes with tool calls
     # For now, we execute tools and make a non-streaming follow-up
@@ -944,7 +1166,14 @@ def _process_tool_calls_streaming(model, session_data, tool_calls, current_conte
 
         if func_name == 'local_command':
             cmd = func_args.get('command', '')
-            result = execute_local_command(cmd)
+            # Check if this was denied by the permission system
+            if tool_call.get('_write_denied'):
+                result = "[Permission denied] Task cancelled"
+            elif is_write_command(cmd):
+                # Write command with permission granted - execute it
+                result = execute_write_command(cmd, current_chat_id)
+            else:
+                result = execute_local_command(cmd)
             tool_results.append({'role': 'tool', 'content': result, 'tool_call_id': tool_id})
         elif func_name == 'web_search':
             query = func_args.get('query', '')
@@ -1085,6 +1314,8 @@ def api_session_switch():
     filepath = os.path.join(SESSIONS_DIR, f"{session_id}.json")
     if os.path.exists(filepath):
         session['chat_id'] = session_id
+        # Reset write permission for new session
+        _session_write_permissions.pop(session_id, None)
         logger.info("Switched to session: %s", session_id)
         return jsonify({'success': True, 'session_id': session_id})
 
@@ -1144,6 +1375,9 @@ def api_session_new():
     """API to create a new session"""
     import uuid
     session['chat_id'] = str(uuid.uuid4())[:8]
+
+    # Reset write permission for new session
+    _session_write_permissions.pop(session.get('chat_id', ''), None)
 
     session_data = {
         'model': session.get('model', 'llama3'),
