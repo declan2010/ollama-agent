@@ -1510,6 +1510,15 @@
                                     addCopyButtons(contentEl);
                                     chatArea.scrollTop = chatArea.scrollHeight;
                                 }
+                            } else if (data.type === 'write_executed') {
+                                // Show notification of write commands executed
+                                const lastMsg = chatArea.querySelector('.message:last-child .message-content');
+                                if (lastMsg && data.commands) {
+                                    const notif = document.createElement('div');
+                                    notif.style.cssText = 'margin-top:8px;padding:8px 12px;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.3);border-radius:6px;font-size:0.85rem;color:#22c55e;';
+                                    notif.innerHTML = '📝 <strong>Escritura ejecutada:</strong> ' + data.commands.map(c => '<code>' + c.replace(/</g,'&lt;') + '</code>').join(', ');
+                                    lastMsg.appendChild(notif);
+                                }
                             } else if (data.type === 'write_permission_required') {
                                 // Show write permission modal
                                 console.log('[WRITE PERM] Received permission request:', data.command, 'perm_id:', data.perm_id);

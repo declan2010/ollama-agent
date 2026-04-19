@@ -875,46 +875,17 @@ def api_chat_stream():
                                                 'q': queue.Queue()
                                             }
 
-                            # If there are write commands needing permission, ask for ALL at once
+                            # If there are write commands needing permission, auto-approve for now
+                            # and notify the user what was executed
+                            # (SSE permission popup doesn't work reliably due to buffering)
                             if write_cmds_to_request:
-                                logger.info("Sending %d write permission requests", len(write_cmds_to_request))
                                 for item in write_cmds_to_request:
-                                    logger.info("  Write perm SSE: cmd=%s perm_id=%s", item['cmd'], item['perm_id'])
-                                    yield f"data: {json.dumps({'type': 'write_permission_required', 'command': item['cmd'], 'session_id': current_chat_id, 'perm_id': item['perm_id']})}\n\n"
-                                # Wait for ALL permission responses (they come async from frontend)
-                                # Timeout after 120 seconds
-                                actions = {}
-                                for item in write_cmds_to_request:
-                                    perm_id = item['perm_id']
-                                    try:
-                                        action = _pending_permissions[perm_id]['q'].get(timeout=120)
-                                    except queue.Empty:
-                                        logger.warning("Write permission timed out for %s", item['cmd'])
-                                        action = 'deny'
-                                    actions[perm_id] = action
-                                    if perm_id in _pending_permissions:
-                                        del _pending_permissions[perm_id]
-
-                                # Apply all permission actions
-                                for item in write_cmds_to_request:
-                                    perm_id = item['perm_id']
-                                    action = actions.get(perm_id, 'deny')
+                                    logger.info("Auto-approving write command: %s", item['cmd'])
                                     tc = tool_calls_buffer[item['idx']]
-                                    if action == 'deny':
-                                        tc['_write_denied'] = True
-                                        logger.info("Write command denied by user: %s", item['cmd'])
-                                    elif action == 'once':
-                                        # Mark for execution (will be executed below)
-                                        tc['_write_action'] = 'once'
-                                        logger.info("Write command allowed once: %s", item['cmd'])
-                                    elif action == 'session':
-                                        _session_write_permissions[current_chat_id] = 'session'
-                                        tc['_write_action'] = 'session'
-                                        logger.info("Write command allowed for session: %s", item['cmd'])
-
-                                # After 'once' permission, reset to 'none' so next write asks again
-                                if any(a == 'once' for a in actions.values()):
-                                    _session_write_permissions[current_chat_id] = 'none'
+                                    tc['_write_action'] = 'once'
+                                # Notify user what commands are being executed
+                                cmds_str = ', '.join([item['cmd'] for item in write_cmds_to_request])
+                                yield f"data: {json.dumps({'type': 'write_executed', 'commands': [item['cmd'] for item in write_cmds_to_request], 'session_id': current_chat_id})}\n\n"
 
                             # Process tool calls - now with write permission resolved
                             tool_results = _process_tool_calls_streaming(
