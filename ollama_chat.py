@@ -124,6 +124,8 @@ SAFE_COMMANDS = {
     'ping': {'flags': {'-c'}, 'allow_args': True},  # ping needs host
     'curl': {'flags': {'-s', '-I', '-i', '-L'}, 'allow_args': True},
     'netstat': {'flags': {'-tuln', '-tln', '-tulnp'}, 'allow_args': False},
+    'echo': {'flags': set(), 'allow_args': True},   # echo for reading (write with > handled separately)
+    'printf': {'flags': set(), 'allow_args': True},  # printf for reading (write with > handled separately)
 }
 
 
@@ -131,6 +133,11 @@ def validate_command(cmd):
     """Validate and parse a command. Returns (command_path, args) or None if invalid."""
     cmd = cmd.strip()
     if not cmd:
+        return None
+
+    # Reject commands with shell redirections (these should go through write permission)
+    if '>' in cmd or '>>' in cmd or '|' in cmd:
+        logger.warning("Rejected command with redirection/pipe (use write permission): %s", cmd)
         return None
 
     parts = cmd.split()
