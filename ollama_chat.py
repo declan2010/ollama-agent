@@ -799,7 +799,7 @@ def api_chat_stream():
             # Add system message to inform about available tools
             api_messages.append({
                 'role': 'system',
-                'content': 'You have access to the following tools: local_command (execute system commands, both read and write), web_search (search the internet), fetch_article (read web pages). When asked to create, write, or modify files, USE the local_command tool with appropriate shell commands (e.g., cat > filename, touch, mkdir, cp, mv, etc.). Do NOT say you cannot write files - you CAN write files using local_command. For write operations, the user will be prompted for confirmation.'
+                'content': 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- Write operations require user confirmation (a popup will appear)'
             })
             for msg in session_data['messages']:
                 api_messages.append({
@@ -1155,6 +1155,14 @@ def api_chat_stream():
         except Exception as e:
             logger.error("Streaming error: %s", e)
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+            # Still save what we have
+            if full_response:
+                session_data['messages'].append({
+                    'role': 'assistant',
+                    'content': full_response,
+                    'timestamp': datetime.now().isoformat()
+                })
+                save_session(current_chat_id, session_data)
             return
 
         # Save session
