@@ -87,7 +87,8 @@ def is_sensitive_path(filepath):
 WRITE_COMMANDS = {
     'touch', 'mkdir', 'rm', 'cp', 'mv', 'nano', 'vim',
     'chmod', 'chown', 'dd', 'tee',
-    'ln', 'unlink', 'rename', 'truncate', 'fallocate'
+    'ln', 'unlink', 'rename', 'truncate', 'fallocate',
+    'sed', 'awk', 'perl'  # text processing that can modify files
 }
 
 # --- Permission queues: session_id -> queue.Queue ---
