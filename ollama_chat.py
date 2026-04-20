@@ -1,5 +1,5 @@
 """
-OllamaAgent - Web Agent for local Ollama models
+Ollama-Agent - Web Agent for local Ollama models
 Allows chatting with local models, selecting models, and saving sessions.
 """
 
@@ -1171,7 +1171,11 @@ def api_chat_stream():
 
         # Detect if the response contains code that should be written to a file
         # (when the model generates code instead of using the local_command tool)
-        code_blocks = re.findall(r'```(\w+)?\n(.*?)```', full_response, re.DOTALL)
+        code_blocks = []
+        try:
+            code_blocks = re.findall(r'```(\w+)?\n(.*?)```', full_response, re.DOTALL)
+        except Exception:
+            pass
         if code_blocks and not tool_calls_buffer:
             # Model generated code as text instead of using tools
             # Offer to save via frontend notification
