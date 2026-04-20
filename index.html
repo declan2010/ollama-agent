@@ -832,7 +832,7 @@
                 </div>
                 <span class="model-info-badge" id="modelInfoBadge">●</span>
             </div>
-            <div style="font-size: 0.6em; color: var(--text-secondary); text-align: right; max-width: 300px; line-height: 1.3; margin-right: 4px;">⚠️ No liability for data damage. <a href="https://www.paypal.com/donate/?hosted_button_id=P3TK84JYLNUU6" target="_blank" style="color: var(--accent);">Support 💛</a></div>
+            <button class="settings-btn" onclick="showDisclaimerModal()" title="Disclaimer" style="font-size: 1.2rem;">⚠️</button>
             <button class="donate-btn" onclick="window.open('https://www.paypal.com/donate/?hosted_button_id=P3TK84JYLNUU6', '_blank')" title="Donate">💜</button>
             <button class="settings-btn" onclick="openSettings()" title="Settings">⚙️</button>
         </div>
@@ -891,6 +891,23 @@
     </div>
 
     <!-- Write Permission Modal -->
+    <div class="modal-overlay" id="disclaimerModal">
+        <div class="modal" style="min-width: 400px; max-width: 550px;">
+            <div class="modal-header">
+                <h2>⚠️ Disclaimer</h2>
+            </div>
+            <div style="padding: 15px 0; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6;">
+                <p>This software is provided <strong>"as is"</strong> without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and noninfringement.</p>
+                <p style="margin-top: 12px;">In no event shall the developer be liable for any claim, damages, or other liability arising from the use of this software. This includes, but is not limited to, any damage to <strong>personal or corporate data</strong>, systems, or equipment.</p>
+                <p style="margin-top: 12px;">By installing and/or using OllamaAgent, <strong>you accept full responsibility</strong> for any consequences resulting from its operation, including data loss, system modifications, or unauthorized access.</p>
+                <p style="margin-top: 12px; color: var(--accent);">The AI agent has the ability to execute system commands and modify files — <strong>use entirely at your own risk.</strong></p>
+            </div>
+            <div style="text-align: center; padding: 10px 0;">
+                <button onclick="document.getElementById('disclaimerModal').classList.remove('active')" style="background: var(--accent); color: white; border: none; padding: 10px 30px; border-radius: 8px; cursor: pointer; font-weight: bold;">I Understand</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="writePermissionModal">
         <div class="modal" style="min-width: 400px;">
             <div class="modal-header">
@@ -1109,6 +1126,10 @@
 
         // Write permission modal functions
         let pendingWritePermission = { command: '', sessionId: '', permId: '' };
+
+        function showDisclaimerModal() {
+            document.getElementById('disclaimerModal').classList.add('active');
+        }
 
         function showWritePermissionModal(command, sessionId, permId) {
             pendingWritePermission = { command: command, sessionId: sessionId, permId: permId };
