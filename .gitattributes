@@ -1,0 +1,4 @@
+# Force Python as primary language on GitHub
+# HTML templates are part of the project but Python is the main codebase
+templates/index.html linguist-language=HTML
+ollama_chat.py linguist-language=Python
