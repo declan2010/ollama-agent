@@ -3,7 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ollama WebChat</title>
+    <title>Ollama-Agent</title>
+    <!-- Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Code highlighting -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/atom-one-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
     <style>
         :root {
             /* Dark theme (default) */
@@ -235,6 +240,32 @@
             padding: 5px 12px;
             border-radius: 15px;
             border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .context-bar-bg {
+            width: 60px;
+            height: 8px;
+            background: var(--bg-primary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .context-bar-fill {
+            height: 100%;
+            background: #4ade80;
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+
+        .context-indicator.warning .context-bar-fill {
+            background: #f59e0b;
+        }
+
+        .context-indicator.danger .context-bar-fill {
+            background: #ef4444;
         }
 
         .context-indicator.warning {
@@ -245,6 +276,23 @@
         .context-indicator.danger {
             color: #ef4444;
             border-color: #ef4444;
+        }
+
+        .model-info-badge {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            background: var(--bg-tertiary);
+            padding: 3px 8px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            display: none;
+        }
+
+        .model-info-badge.loaded {
+            display: inline-block;
+            background: rgba(74, 222, 128, 0.15);
+            color: #4ade80;
+            border-color: #4ade80;
         }
 
         .settings-btn {
@@ -311,6 +359,11 @@
             to { opacity: 1; transform: translateY(0); }
         }
 
+        @keyframes pulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+
         .message-avatar {
             width: 40px;
             height: 40px;
@@ -341,12 +394,47 @@
             border-radius: 15px;
             border-top-left-radius: 5px;
             transition: background 0.3s;
+            overflow-wrap: break-word;
+            word-break: break-word;
         }
 
         .message.user .message-content {
             background: var(--bg-tertiary);
             border-top-left-radius: 15px;
             border-top-right-radius: 5px;
+        }
+
+        /* Markdown rendering styles */
+        .message-content h1, .message-content h2, .message-content h3,
+        .message-content h4, .message-content h5, .message-content h6 {
+            margin-top: 16px;
+            margin-bottom: 8px;
+            line-height: 1.3;
+        }
+
+        .message-content h1 { font-size: 1.5em; }
+        .message-content h2 { font-size: 1.3em; }
+        .message-content h3 { font-size: 1.15em; }
+
+        .message-content p {
+            margin-bottom: 10px;
+        }
+
+        .message-content ul, .message-content ol {
+            margin-bottom: 10px;
+            padding-left: 24px;
+        }
+
+        .message-content li {
+            margin-bottom: 4px;
+        }
+
+        .message-content blockquote {
+            border-left: 3px solid var(--accent);
+            padding-left: 12px;
+            margin: 10px 0;
+            color: var(--text-secondary);
+            font-style: italic;
         }
 
         .message-content pre {
@@ -356,6 +444,13 @@
             overflow-x: auto;
             margin: 10px 0;
             font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            position: relative;
+        }
+
+        .message-content pre code {
+            background: transparent;
+            padding: 0;
             font-size: 0.85rem;
         }
 
@@ -367,9 +462,61 @@
             font-size: 0.85rem;
         }
 
-        .message-content pre code {
-            background: transparent;
-            padding: 0;
+        .message-content table {
+            border-collapse: collapse;
+            margin: 10px 0;
+            width: 100%;
+        }
+
+        .message-content th, .message-content td {
+            border: 1px solid var(--border);
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        .message-content th {
+            background: var(--bg-tertiary);
+            font-weight: bold;
+        }
+
+        .message-content a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        .message-content a:hover {
+            text-decoration: underline;
+        }
+
+        .message-content hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 15px 0;
+        }
+
+        .message-content img {
+            max-width: 100%;
+            border-radius: 8px;
+        }
+
+        /* Copy button for code blocks */
+        .copy-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: rgba(255,255,255,0.1);
+            border: none;
+            color: var(--text-secondary);
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            transition: background 0.2s;
+        }
+
+        .copy-btn:hover {
+            background: rgba(255,255,255,0.2);
+            color: var(--text-primary);
         }
 
         .input-area {
@@ -426,6 +573,23 @@
             cursor: not-allowed;
         }
 
+        .stop-btn {
+            background: #ef4444;
+            color: white;
+            border: none;
+            width: 60px;
+            height: 60px;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 1.3rem;
+            transition: background 0.3s;
+            display: none;
+        }
+
+        .stop-btn:hover {
+            background: #dc2626;
+        }
+
         .typing-indicator {
             display: none;
             padding: 20px;
@@ -457,6 +621,13 @@
         @keyframes bounce {
             0%, 80%, 100% { transform: scale(0); }
             40% { transform: scale(1); }
+        }
+
+        /* Streaming cursor */
+        .streaming-cursor::after {
+            content: '▊';
+            animation: pulse 0.8s infinite;
+            color: var(--accent);
         }
 
         /* Modal Styles */
@@ -595,13 +766,36 @@
         .light-theme .clear-all-btn:hover {
             background: #ff4444;
         }
+
+        /* Scrollbar styling */
+        .chat-area::-webkit-scrollbar,
+        .sessions-list::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .chat-area::-webkit-scrollbar-track,
+        .sessions-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .chat-area::-webkit-scrollbar-thumb,
+        .sessions-list::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        .chat-area::-webkit-scrollbar-thumb:hover,
+        .sessions-list::-webkit-scrollbar-thumb:hover {
+            background: var(--accent);
+        }
     </style>
 </head>
 <body>
     <div class="sidebar">
         <div class="sidebar-header">
-            <h1>🦙 OllamaChat</h1>
-            <p>Local AI Models</p>
+            <h1>🤖 Ollama-Agent</h1>
+            <span style="font-size: 0.7em; color: var(--text-secondary); margin-left: 8px;">by Declan2010</span>
+            <p>Python + HTML AI Agent</p>
         </div>
 
         <button class="new-chat-btn" onclick="newChat()">+ New Chat</button>
@@ -633,16 +827,19 @@
                     </select>
                 </div>
                 <div class="context-indicator" id="contextIndicator">
-                    <span id="contextText">Context: 0 tokens</span>
+                    <div class="context-bar-bg"><div class="context-bar-fill" id="contextBar" style="width: 0%"></div></div>
+                    <span id="contextText">0%</span>
                 </div>
+                <span class="model-info-badge" id="modelInfoBadge">●</span>
             </div>
-            <button class="donate-btn" onclick="window.open('https://www.paypal.com/donate/?hosted_button_id=P3TK84JYLNUU6', '_blank')" title="Donate">💜</button>
+            <button class="settings-btn" onclick="showDisclaimerModal()" title="Disclaimer" style="font-size: 1.2rem;">⚠️</button>
+            <button class="donate-btn" onclick="showDonateModal()" title="Donate">💜</button>
             <button class="settings-btn" onclick="openSettings()" title="Settings">⚙️</button>
         </div>
 
         <div class="chat-area" id="chatArea">
             <div class="welcome-message">
-                <h2>Welcome to OllamaChat</h2>
+                <h2>Welcome to Ollama-Agent</h2>
                 <p>Select a model and start chatting</p>
                 <p style="font-size: 0.85rem;">Messages are saved automatically</p>
             </div>
@@ -658,6 +855,7 @@
         <div class="input-area">
             <div class="input-container">
                 <textarea id="messageInput" placeholder="Type your message..." rows="1" onkeydown="handleKeyDown(event)"></textarea>
+                <button class="stop-btn" id="stopBtn" onclick="stopGeneration()">■</button>
                 <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
             </div>
         </div>
@@ -692,49 +890,164 @@
         </div>
     </div>
 
+    <!-- Write Permission Modal -->
+    <div class="modal-overlay" id="disclaimerModal">
+        <div class="modal" style="min-width: 400px; max-width: 550px;">
+            <div class="modal-header">
+                <h2>⚠️ Disclaimer</h2>
+            </div>
+            <div style="padding: 15px 0; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6;">
+                <p>This software is provided <strong>"as is"</strong> without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and noninfringement.</p>
+                <p style="margin-top: 12px;">In no event shall the developer be liable for any claim, damages, or other liability arising from the use of this software. This includes, but is not limited to, any damage to <strong>personal or corporate data</strong>, systems, or equipment.</p>
+                <p style="margin-top: 12px;">By installing and/or using Ollama-Agent, <strong>you accept full responsibility</strong> for any consequences resulting from its operation, including data loss, system modifications, or unauthorized access.</p>
+                <p style="margin-top: 12px; color: var(--accent);">The AI agent has the ability to execute system commands and modify files — <strong>use entirely at your own risk.</strong></p>
+            </div>
+            <div style="text-align: center; padding: 10px 0;">
+                <button onclick="document.getElementById('disclaimerModal').classList.remove('active')" style="background: var(--accent); color: white; border: none; padding: 10px 30px; border-radius: 8px; cursor: pointer; font-weight: bold;">I Understand</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="donateModal">
+        <div class="modal" style="min-width: 450px; max-width: 600px;">
+            <div class="modal-header">
+                <h2>💛 Support Ollama-Agent</h2>
+                <button onclick="document.getElementById('donateModal').classList.remove('active')" style="background: none; border: none; color: var(--text-secondary); font-size: 1.5rem; cursor: pointer; padding: 0 4px;">✕</button>
+            </div>
+            <div style="padding: 20px 0; text-align: center; color: var(--text-primary);">
+                <div style="font-size: 3rem; margin-bottom: 12px;">🤖</div>
+                <p style="font-size: 1rem; line-height: 1.6; margin-bottom: 20px;">Ollama-Agent is free and open source. If you find it useful, consider donating to help cover development and server costs. Your support keeps this project alive and improving!</p>
+                <a href="https://www.paypal.com/donate/?hosted_button_id=P3TK84JYLNUU6" target="_blank" style="display: inline-block; background: #0070ba; color: white; text-decoration: none; padding: 14px 40px; border-radius: 8px; font-size: 1.1rem; font-weight: bold; margin-top: 8px;">Donate via PayPal 💛</a>
+                <p style="margin-top: 16px; font-size: 0.8rem; color: var(--text-secondary);">Every contribution, big or small, makes a difference. Thank you! 🙏</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="writePermissionModal">
+        <div class="modal" style="min-width: 400px;">
+            <div class="modal-header">
+                <h2>\u26a0\ufe0f Write Permission Required</h2>
+            </div>
+            <div style="padding: 15px 0;">
+                <p style="color: var(--text-primary); margin-bottom: 8px;">The assistant wants to run:</p>
+                <pre id="writePermissionCommand" style="background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; font-family: 'Courier New', monospace; font-size: 0.9rem; color: var(--accent); margin-bottom: 20px;"></pre>
+                <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 20px;">This command will modify files or system state.</p>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <button onclick="handleWritePermission('session')" style="background: #22c55e; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: bold;">
+                        \u2705 Acceso total en esta conversaci\u00f3n
+                    </button>
+                    <button onclick="handleWritePermission('once')" style="background: #f59e0b; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: bold;">
+                        \u21aa Solo esta vez
+                    </button>
+                    <button onclick="handleWritePermission('deny')" style="background: #ef4444; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: bold;">
+                        \u274c Denegar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         let currentSessionId = '{{ session.get("chat_id", "") }}';
         let isWaiting = false;
+        let currentEventSource = null;
+        let maxContextTokens = 4096;
 
         const chatArea = document.getElementById('chatArea');
         const messageInput = document.getElementById('messageInput');
         const sendBtn = document.getElementById('sendBtn');
+        const stopBtn = document.getElementById('stopBtn');
         const modelSelect = document.getElementById('modelSelect');
         const fallbackModelSelect = document.getElementById('fallbackModelSelect');
         const typingIndicator = document.getElementById('typingIndicator');
 
+        // Configure marked for markdown rendering
+        if (typeof marked !== 'undefined') {
+            marked.setOptions({
+                breaks: true,
+                gfm: true,
+                highlight: function(code, lang) {
+                    if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+                        try {
+                            return hljs.highlight(code, { language: lang }).value;
+                        } catch (e) {}
+                    }
+                    if (typeof hljs !== 'undefined') {
+                        try {
+                            return hljs.highlightAuto(code).value;
+                        } catch (e) {}
+                    }
+                    return code;
+                }
+            });
+        }
+
+        function renderMarkdown(text) {
+            if (typeof marked !== 'undefined') {
+                try {
+                    return marked.parse(text);
+                } catch (e) {
+                    // Fallback to basic rendering
+                }
+            }
+            // Fallback: basic formatting
+            return text
+                .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                .replace(/\n/g, '<br>');
+        }
+
+        // Add copy buttons to code blocks after rendering
+        function addCopyButtons(container) {
+            container.querySelectorAll('pre').forEach(pre => {
+                if (pre.querySelector('.copy-btn')) return;
+                const btn = document.createElement('button');
+                btn.className = 'copy-btn';
+                btn.textContent = 'Copy';
+                btn.onclick = () => {
+                    const code = pre.querySelector('code');
+                    navigator.clipboard.writeText(code ? code.textContent : pre.textContent);
+                    btn.textContent = 'Copied!';
+                    setTimeout(() => btn.textContent = 'Copy', 2000);
+                };
+                pre.style.position = 'relative';
+                pre.appendChild(btn);
+            });
+        }
+
         // Load saved preferences
         function loadPreferences() {
-            const savedFallback = localStorage.getItem('ollama-chat-fallback');
+            const savedFallback = localStorage.getItem('ollama-agent-fallback');
             if (savedFallback) {
                 fallbackModelSelect.value = savedFallback;
             }
         }
 
         fallbackModelSelect.addEventListener('change', function() {
-            localStorage.setItem('ollama-chat-fallback', this.value);
+            localStorage.setItem('ollama-agent-fallback', this.value);
         });
 
-        // Actualizar indicador de contexto
+        // Update context indicator with visual bar
         async function updateContextIndicator(currentTokens) {
             const contextIndicator = document.getElementById('contextIndicator');
             const contextText = document.getElementById('contextText');
+            const contextBar = document.getElementById('contextBar');
 
-            // Obtener max tokens del modelo actual
             try {
                 const response = await fetch(`/api/model-info?model=${encodeURIComponent(modelSelect.value)}`);
                 const info = await response.json();
 
                 if (info.error) {
-                    contextText.textContent = `Context: ~${currentTokens} tokens`;
+                    contextText.textContent = `~${currentTokens} tokens`;
+                    contextBar.style.width = '0%';
                     return;
                 }
 
-                const maxTokens = info.num_ctx || info.context_length || 4096;
-                const percentage = Math.round((currentTokens / maxTokens) * 100);
-                contextText.textContent = `Context: ${currentTokens} / ${maxTokens} (${percentage}%)`;
+                maxContextTokens = info.num_ctx || info.context_length || 4096;
+                const percentage = Math.round((currentTokens / maxContextTokens) * 100);
+                contextText.textContent = `${percentage}%`;
+                contextBar.style.width = `${Math.min(percentage, 100)}%`;
 
-                // Cambiar color según uso
                 contextIndicator.classList.remove('warning', 'danger');
                 if (percentage >= 90) {
                     contextIndicator.classList.add('danger');
@@ -742,18 +1055,67 @@
                     contextIndicator.classList.add('warning');
                 }
             } catch (e) {
-                contextText.textContent = `Context: ~${currentTokens} tokens`;
+                contextText.textContent = `~${currentTokens} tokens`;
+                contextBar.style.width = '0%';
+            }
+        }
+
+        // Check model loaded status
+        async function checkModelStatus() {
+            const badge = document.getElementById('modelInfoBadge');
+            try {
+                const response = await fetch(`/api/model-info?model=${encodeURIComponent(modelSelect.value)}`);
+                const info = await response.json();
+                if (info.loaded === true) {
+                    badge.className = 'model-info-badge loaded';
+                    badge.textContent = '● Loaded';
+                } else if (info.loaded === false) {
+                    badge.className = 'model-info-badge';
+                    badge.textContent = '○ Unloaded';
+                    badge.style.display = 'inline-block';
+                } else {
+                    badge.style.display = 'none';
+                }
+
+                // Show model size if available
+                const sizeBytes = info.size || 0;
+                const paramSize = info.details?.parameter_size || info.parameter_size || '';
+                if (sizeBytes > 0) {
+                    const sizeMB = Math.round(sizeBytes / (1024 * 1024));
+                    badge.textContent += ` ${sizeMB > 1024 ? (sizeMB / 1024).toFixed(1) + 'GB' : sizeMB + 'MB'}`;
+                } else if (paramSize) {
+                    badge.textContent += ` ${paramSize}`;
+                }
+            } catch (e) {
+                badge.style.display = 'none';
             }
         }
 
         modelSelect.addEventListener('change', function() {
-            // Limpiar contexto al cambiar de modelo
             updateContextIndicator(0);
+            checkModelStatus();
+            // Save model to current session
+            if (currentSessionId) {
+                fetch(`/api/session/${currentSessionId}`)
+                    .then(r => r.json())
+                    .then(data => {
+                        data.model = modelSelect.value;
+                        // Save fallback model too
+                        if (fallbackModelSelect) {
+                            data.fallback_model = fallbackModelSelect.value;
+                        }
+                        fetch(`/api/session/save`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ session_id: currentSessionId, data: data })
+                        });
+                    });
+            }
         });
 
         // Load theme from localStorage
         function loadTheme() {
-            const theme = localStorage.getItem('ollama-chat-theme') || 'dark';
+            const theme = localStorage.getItem('ollama-agent-theme') || 'dark';
             setTheme(theme);
         }
 
@@ -763,9 +1125,8 @@
             } else {
                 document.body.classList.remove('light-theme');
             }
-            localStorage.setItem('ollama-chat-theme', theme);
+            localStorage.setItem('ollama-agent-theme', theme);
 
-            // Update button states
             document.getElementById('darkThemeBtn').classList.toggle('active', theme === 'dark');
             document.getElementById('lightThemeBtn').classList.toggle('active', theme === 'light');
         }
@@ -777,6 +1138,75 @@
         function closeSettings() {
             document.getElementById('settingsModal').classList.remove('active');
         }
+
+        // Write permission modal functions
+        let pendingWritePermission = { command: '', sessionId: '', permId: '' };
+
+        function showDisclaimerModal() {
+            document.getElementById('disclaimerModal').classList.add('active');
+        }
+
+        function showDonateModal() {
+            document.getElementById('donateModal').classList.add('active');
+        }
+
+        function showWritePermissionModal(command, sessionId, permId) {
+            pendingWritePermission = { command: command, sessionId: sessionId, permId: permId };
+            document.getElementById('writePermissionCommand').textContent = command;
+            document.getElementById('writePermissionModal').classList.add('active');
+        }
+
+        async function saveCodeToFile(btn) {
+            const code = btn.dataset.code;
+            const filepath = btn.parentElement.querySelector('#saveCodePath').value;
+            btn.textContent = '⏳ Saving...';
+            btn.disabled = true;
+            try {
+                const resp = await fetch('/api/save-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filepath: filepath, content: code, session_id: currentSessionId })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    btn.textContent = '✅ Saved!';
+                    btn.style.background = '#16a34a';
+                } else if (data.error === 'write_permission_required') {
+                    btn.textContent = '❌ Need permission';
+                    showWritePermissionModal(data.command, currentSessionId, '');
+                } else {
+                    btn.textContent = '❌ Error';
+                    btn.title = data.error;
+                }
+            } catch (e) {
+                btn.textContent = '❌ Failed';
+            }
+        }
+
+        async function handleWritePermission(action) {
+            const { command, sessionId, permId } = pendingWritePermission;
+            document.getElementById('writePermissionModal').classList.remove('active');
+
+            try {
+                await fetch('/api/write-permission', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        command: command,
+                        action: action,
+                        perm_id: permId
+                    })
+                });
+            } catch (error) {
+                console.error('Error sending write permission:', error);
+            }
+        }
+
+        // Close write permission modal on outside click
+        document.getElementById('writePermissionModal').addEventListener('click', function(e) {
+            // Don't close on outside click - user must choose an option
+        });
 
         async function clearAllChats() {
             if (confirm('Are you sure you want to delete ALL chats? This cannot be undone.')) {
@@ -806,6 +1236,7 @@
         loadSessions();
         loadTheme();
         loadPreferences();
+        checkModelStatus();
 
         messageInput.addEventListener('input', function() {
             this.style.height = 'auto';
@@ -861,7 +1292,16 @@
 
                     if (data.success) {
                         if (sessionId === currentSessionId) {
-                            newChat();
+                            // Clear current session, show welcome
+                            currentSessionId = null;
+                            updateContextIndicator(0);
+                            chatArea.innerHTML = `
+                                <div class="welcome-message">
+                                    <h2>Conversation deleted</h2>
+                                    <p>Click "+ New Chat" to start a new conversation.</p>
+                                </div>
+                            `;
+                            loadSessions();
                         } else {
                             loadSessions();
                         }
@@ -877,7 +1317,7 @@
 
         async function renameChat(sessionId) {
             const title = prompt('Rename chat:', '');
-            if (title === null) return; // Cancelado
+            if (title === null) return;
 
             const trimmed = title.trim();
             if (!trimmed) {
@@ -895,7 +1335,6 @@
 
                 if (data.success) {
                     loadSessions();
-                    // If it's the current session, update the title in the header
                     if (sessionId === currentSessionId) {
                         const titleEl = document.getElementById('sessionTitle');
                         if (titleEl) titleEl.textContent = trimmed;
@@ -909,13 +1348,24 @@
         }
 
         async function newChat() {
+            // Close any open write permission modal
+            document.getElementById('writePermissionModal').classList.remove('active');
             try {
                 const response = await fetch('/api/session/new', { method: 'POST' });
                 const data = await response.json();
 
                 currentSessionId = data.session_id;
+                updateContextIndicator(0);
 
-                // Limpiar área de chat
+                // Save current model selection to the new session
+                if (modelSelect.value) {
+                    fetch(`/api/session/save`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: currentSessionId, data: { model: modelSelect.value, fallback_model: fallbackModelSelect ? fallbackModelSelect.value : '' } })
+                    });
+                }
+
                 chatArea.innerHTML = `
                     <div class="welcome-message">
                         <h2>New Conversation</h2>
@@ -932,7 +1382,16 @@
         }
 
         async function switchSession(sessionId) {
+            // Close any open write permission modal
+            document.getElementById('writePermissionModal').classList.remove('active');
             try {
+                // Sync server-side session first
+                await fetch('/api/session/switch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId })
+                });
+
                 const response = await fetch(`/api/session/${sessionId}`);
                 const data = await response.json();
 
@@ -943,13 +1402,22 @@
 
                 currentSessionId = sessionId;
 
-                // Actualizar modelos de la sesión
+                // Restore context usage for this conversation
+                if (data.context_usage !== undefined) {
+                    updateContextIndicator(data.context_usage);
+                } else {
+                    // New conversation, reset context
+                    updateContextIndicator(0);
+                }
+
                 if (data.model) modelSelect.value = data.model;
                 if (data.fallback_model && fallbackModelSelect) {
                     fallbackModelSelect.value = data.fallback_model;
                 }
 
-                // Limpiar y mostrar mensajes
+                // Dismiss any pending write permission modal
+                document.getElementById('writePermissionModal').classList.remove('active');
+
                 chatArea.innerHTML = '';
 
                 if (data.messages && data.messages.length > 0) {
@@ -966,9 +1434,29 @@
                 }
 
                 loadSessions();
+                checkModelStatus();
             } catch (error) {
                 console.error('Error switching session:', error);
                 alert('Error loading chat');
+            }
+        }
+
+        // Stop generation
+        function stopGeneration() {
+            if (currentEventSource) {
+                currentEventSource.close();
+                currentEventSource = null;
+            }
+            isWaiting = false;
+            sendBtn.style.display = '';
+            stopBtn.style.display = 'none';
+            sendBtn.disabled = false;
+            typingIndicator.classList.remove('active');
+
+            // Remove streaming cursor from last assistant message
+            const lastMsg = chatArea.querySelector('.message.assistant:last-child .message-content');
+            if (lastMsg) {
+                lastMsg.classList.remove('streaming-cursor');
             }
         }
 
@@ -984,8 +1472,167 @@
 
             isWaiting = true;
             sendBtn.disabled = true;
+
+            // Show stop button, hide send button
+            sendBtn.style.display = 'none';
+            stopBtn.style.display = '';
+
+            // Add placeholder assistant message for streaming
+            const welcome = chatArea.querySelector('.welcome-message');
+            if (welcome) welcome.remove();
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message assistant';
+            messageDiv.id = 'streaming-message';
+            messageDiv.innerHTML = `
+                <div class="message-avatar assistant">🤖</div>
+                <div class="message-content streaming-cursor"></div>
+            `;
+            chatArea.appendChild(messageDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+
             typingIndicator.classList.add('active');
 
+            // Try streaming first
+            try {
+                await sendStreamingMessage(message);
+            } catch (e) {
+                console.error('Streaming failed, falling back to non-streaming:', e);
+                // Remove streaming placeholder
+                const streamEl = document.getElementById('streaming-message');
+                if (streamEl) streamEl.remove();
+                // Fall back to regular request
+                await sendRegularMessage(message);
+            }
+        }
+
+        async function sendStreamingMessage(message) {
+            const contentEl = document.querySelector('#streaming-message .message-content');
+            let fullResponse = '';
+
+            try {
+                const response = await fetch('/api/chat/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        model: modelSelect.value,
+                        fallback_model: fallbackModelSelect.value
+                    })
+                });
+
+                if (!response.ok) {
+                    const errData = await response.json().catch(() => ({}));
+                    throw new Error(errData.error || `HTTP ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed.startsWith('data: ')) continue;
+
+                        try {
+                            const data = JSON.parse(trimmed.slice(6));
+
+                            if (data.type === 'token') {
+                                fullResponse += data.content;
+                                if (contentEl) {
+                                    contentEl.innerHTML = renderMarkdown(fullResponse);
+                                    addCopyButtons(contentEl);
+                                    chatArea.scrollTop = chatArea.scrollHeight;
+                                }
+                            } else if (data.type === 'write_executed') {
+                                // Show notification of write commands executed
+                                const lastMsg = chatArea.querySelector('.message:last-child .message-content');
+                                if (lastMsg && data.commands) {
+                                    const notif = document.createElement('div');
+                                    notif.style.cssText = 'margin-top:8px;padding:8px 12px;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.3);border-radius:6px;font-size:0.85rem;color:#22c55e;';
+                                    notif.innerHTML = '📝 <strong>Escritura ejecutada:</strong> ' + data.commands.map(c => '<code>' + c.replace(/</g,'&lt;') + '</code>').join(', ');
+                                    lastMsg.appendChild(notif);
+                                }
+                            } else if (data.type === 'write_permission_required') {
+                                // Show write permission modal
+                                console.log('[WRITE PERM] Received permission request:', data.command, 'perm_id:', data.perm_id);
+                                showWritePermissionModal(data.command, data.session_id, data.perm_id || '');
+                            } else if (data.type === 'code_save_offer') {
+                                // Model generated code as text - offer to save it
+                                const lastMsg = chatArea.querySelector('.message:last-child .message-content');
+                                if (lastMsg) {
+                                    const saveBar = document.createElement('div');
+                                    saveBar.className = 'code-save-bar';
+                                    saveBar.style.cssText = 'margin-top:10px;padding:10px;background:var(--sidebar-bg);border-radius:8px;display:flex;gap:8px;align-items:center;';
+                                    saveBar.innerHTML = `
+                                        <span style="flex:1;color:var(--text-secondary);font-size:0.85rem;">💾 The model generated ${data.language} code. Save to file?</span>
+                                        <input type="text" id="saveCodePath" value="/home/cvc1/output.${data.language === 'javascript' ? 'js' : data.language === 'python' ? 'py' : data.language}" style="flex:2;padding:6px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.85rem;">
+                                        <button onclick="saveCodeToFile(this)" style="padding:6px 16px;border:none;border-radius:4px;background:#22c55e;color:white;cursor:pointer;font-weight:bold;">💾 Save</button>
+                                    `;
+                                    // Store code data on the button
+                                    saveBar.querySelector('button').dataset.code = data.code;
+                                    lastMsg.appendChild(saveBar);
+                                }
+                            } else if (data.type === 'error') {
+                                fullResponse += `\n\n**Error:** ${data.content}`;
+                                if (contentEl) {
+                                    contentEl.innerHTML = renderMarkdown(fullResponse);
+                                    addCopyButtons(contentEl);
+                                }
+                            } else if (data.type === 'done') {
+                                if (data.context_usage !== undefined) {
+                                    updateContextIndicator(data.context_usage);
+                                }
+                                // Update model status after response (model is now loaded)
+                                checkModelStatus();
+                            }
+                        } catch (parseErr) {
+                            // Skip unparseable lines
+                        }
+                    }
+                }
+            } catch (e) {
+                if (!fullResponse) {
+                    if (contentEl) {
+                        contentEl.innerHTML = renderMarkdown(`**Error:** ${e.message}`);
+                        addCopyButtons(contentEl);
+                    }
+                }
+            }
+
+            // Remove streaming cursor
+            if (contentEl) {
+                contentEl.classList.remove('streaming-cursor');
+            }
+
+            // Finalize: remove the streaming placeholder
+            const streamEl = document.getElementById('streaming-message');
+            if (streamEl) {
+                streamEl.remove();
+            }
+
+            // Add final message using normal rendering
+            if (fullResponse) {
+                addMessageToUI('assistant', fullResponse);
+            }
+
+            isWaiting = false;
+            sendBtn.style.display = '';
+            stopBtn.style.display = 'none';
+            sendBtn.disabled = false;
+            typingIndicator.classList.remove('active');
+            loadSessions();
+        }
+
+        async function sendRegularMessage(message) {
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
@@ -997,16 +1644,22 @@
                     })
                 });
 
+                if (response.status === 429) {
+                    addMessageToUI('assistant', '⚠️ Rate limit exceeded. Please wait a moment and try again.');
+                    return;
+                }
+
                 const data = await response.json();
 
                 if (data.error) {
                     addMessageToUI('assistant', 'Error: ' + data.error);
                 } else {
                     addMessageToUI('assistant', data.response);
-                    // Actualizar indicador de contexto
                     if (data.context_usage !== undefined) {
                         updateContextIndicator(data.context_usage);
                     }
+                    // Update model status after response (model is now loaded)
+                    checkModelStatus();
                 }
 
                 loadSessions();
@@ -1014,6 +1667,8 @@
                 addMessageToUI('assistant', 'Connection error: ' + error.message);
             } finally {
                 isWaiting = false;
+                sendBtn.style.display = '';
+                stopBtn.style.display = 'none';
                 sendBtn.disabled = false;
                 typingIndicator.classList.remove('active');
             }
@@ -1029,17 +1684,15 @@
             const avatar = role === 'user' ? 'U' : '🤖';
             const avatarClass = role === 'user' ? 'user' : 'assistant';
 
-            let formattedContent = content
-                .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-                .replace(/`([^`]+)`/g, '<code>$1</code>')
-                .replace(/\n/g, '<br>');
+            const renderedContent = renderMarkdown(content);
 
             messageDiv.innerHTML = `
                 <div class="message-avatar ${avatarClass}">${avatar}</div>
-                <div class="message-content">${formattedContent}</div>
+                <div class="message-content">${renderedContent}</div>
             `;
 
             chatArea.appendChild(messageDiv);
+            addCopyButtons(messageDiv.querySelector('.message-content'));
             chatArea.scrollTop = chatArea.scrollHeight;
         }
     </script>
