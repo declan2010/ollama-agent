@@ -799,7 +799,7 @@ def api_chat_stream():
             api_messages = []
             # Model-specific system prompts based on known behavior
             MODEL_HINTS = {
-                'glm': 'IMPORTANT: Always use local_command tool to write files. Use cat > /path/to/file << \'EOF\' ... EOF for creating files. Do NOT output code as text.',
+                'glm': 'IMPORTANT: Always use local_command tool to write/edit files. Use cat > /path/to/file << \'EOF\' ... EOF for creating files, sed -i for editing text in files. Use /home/cvc1/ instead of $HOME or ~. Do NOT output code as text.',
                 'minimax': 'Use tools when available. For file operations, use local_command with shell commands.',
                 'gemma': 'You have access to local_command, web_search, and fetch_article tools. Use them proactively.',
                 'kimi': 'Use the available tools for file operations and web searches. Do not just show code.',
@@ -810,7 +810,7 @@ def api_chat_stream():
                 if key in model.lower():
                     model_hint = hint
                     break
-            system_content = 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- Write operations will be executed automatically with user notification'
+            system_content = 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- Write operations will be executed automatically with user notification'
             if model_hint:
                 system_content += '\n\n' + model_hint
             api_messages.append({
