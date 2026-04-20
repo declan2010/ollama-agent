@@ -949,32 +949,73 @@ def api_chat_stream():
                                     break  # Got a text response, done
                                 elif followup_content and followup_tool_calls:
                                     # Model has partial content but wants more tools
-                                    # Send what we have and force a complete response with tool results
-                                    logger.info("Model has partial content (%d chars) + tool calls, forcing final response", len(followup_content))
-                                    tool_summaries = []
-                                    for m in followup_messages:
-                                        if m.get('role') == 'tool' and m.get('content'):
-                                            tool_summaries.append(m['content'])
-                                    context_hint = ''
-                                    if tool_summaries:
-                                        context_hint = f'\n\nHere are the search results I found:\n"""\n{"---".join(tool_summaries)}\n"""\n\nPlease provide a complete answer based on this information.'
-                                    followup_messages.append({'role': 'assistant', 'content': followup_content})
-                                    try:
-                                        final_result = send_to_ollama(model, followup_messages, None, stream=False)
-                                        final_content = final_result.get('message', {}).get('content', '')
-                                        if final_content:
-                                            full_response = final_content
-                                            yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
-                                            prompt_tokens = final_result.get('prompt_eval_count', prompt_tokens)
-                                        else:
-                                            # Model returned empty, send partial content
-                                            full_response = followup_content
-                                            yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
-                                    except Exception as e:
-                                        logger.error("Forced final response failed: %s", e)
+                                    # Check if any of the tool calls are write commands - if so, let them execute
+                                    has_write_cmd = False
+                                    for tc in followup_tool_calls:
+                                        tc_args = tc.get('function', {}).get('arguments', {})
+                                        if tc.get('function', {}).get('name') == 'local_command' and is_write_command(tc_args.get('command', '')):
+                                            has_write_cmd = True
+                                            break
+                                    
+                                    if has_write_cmd:
+                                        # Let write commands execute - treat as normal tool calls
+                                        logger.info("Model has partial content + write tool calls, allowing execution")
+                                        # Send partial content first
                                         full_response = followup_content
                                         yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
-                                    break
+                                        # Now execute the write tool calls
+                                        followup_messages.append({'role': 'assistant', 'content': followup_content, 'tool_calls': followup_tool_calls})
+                                        for tc in followup_tool_calls:
+                                            tc_name = tc.get('function', {}).get('name', '')
+                                            tc_args = tc.get('function', {}).get('arguments', {})
+                                            tc_id = tc.get('id', f'tool_{round_num}_{len(followup_tool_calls)}')
+                                            if tc_name == 'local_command':
+                                                cmd = tc_args.get('command', '')
+                                                if is_write_command(cmd):
+                                                    # Auto-approve write command
+                                                    logger.info("Auto-approving follow-up write: %s", cmd)
+                                                    result = execute_write_command(cmd)
+                                                else:
+                                                    result = execute_local_command(cmd)
+                                                followup_messages.append({'role': 'tool', 'content': result, 'tool_call_id': tc_id})
+                                            elif tc_name == 'web_search':
+                                                q = tc_args.get('query', '')
+                                                results = web_search(q)
+                                                followup_messages.append({'role': 'tool', 'content': json.dumps(results[:5]), 'tool_call_id': tc_id})
+                                            elif tc_name == 'fetch_article':
+                                                url = tc_args.get('url', '')
+                                                article = fetch_article(url)
+                                                content = article.get('content', '')[:2000] if article.get('content') else f"Could not fetch {url}"
+                                                followup_messages.append({'role': 'tool', 'content': content, 'tool_call_id': tc_id})
+                                        # Continue loop to get final response after write
+                                        continue
+                                    else:
+                                        # Non-write tools (search, etc.) - force final response
+                                        logger.info("Model has partial content (%d chars) + tool calls, forcing final response", len(followup_content))
+                                        tool_summaries = []
+                                        for m in followup_messages:
+                                            if m.get('role') == 'tool' and m.get('content'):
+                                                tool_summaries.append(m['content'])
+                                        context_hint = ''
+                                        if tool_summaries:
+                                            context_hint = f'\n\nHere are the search results I found:\n"""\n{"---".join(tool_summaries)}\n"""\n\nPlease provide a complete answer based on this information.'
+                                        followup_messages.append({'role': 'assistant', 'content': followup_content})
+                                        try:
+                                            final_result = send_to_ollama(model, followup_messages, None, stream=False)
+                                            final_content = final_result.get('message', {}).get('content', '')
+                                            if final_content:
+                                                full_response = final_content
+                                                yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                                prompt_tokens = final_result.get('prompt_eval_count', prompt_tokens)
+                                            else:
+                                                # Model returned empty, send partial content
+                                                full_response = followup_content
+                                                yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                        except Exception as e:
+                                            logger.error("Forced final response failed: %s", e)
+                                            full_response = followup_content
+                                            yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                        break
 
                                 elif followup_tool_calls and tools_for_this_round is not None:
                                     if full_response:
