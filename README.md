@@ -1,4 +1,4 @@
-# 🤖 OllamaAgent
+# 🤖 Ollama-Agent
 
 **by Declan2010**
 
@@ -26,8 +26,8 @@ A web-based AI agent for Ollama with web search, local command execution, and fi
 
 ```bash
 # Clone the repository
-git clone https://github.com/declan2010/ollamaAgent.git
-cd ollamaAgent
+git clone https://github.com/declan2010/ollama-agent.git
+cd ollama-agent
 
 # Install dependencies
 pip install flask flask-cors ddgs
@@ -61,7 +61,7 @@ The agent can use these tools when available:
 ## Project Structure
 
 ```
-ollamaAgent/
+ollama-agent/
 ├── ollama_chat.py   # Flask backend with Ollama integration
 ├── templates/
 │   └── index.html   # Frontend chat interface
@@ -86,7 +86,7 @@ ollamaAgent/
 
 ### Running on Windows
 
-OllamaAgent uses Linux/Unix shell commands (`ls`, `cat`, `grep`, `bash`, etc.) and Unix-style file paths (`/home/user/`). It does **not** run natively on Windows Command Prompt or PowerShell.
+Ollama-Agent uses Linux/Unix shell commands (`ls`, `cat`, `grep`, `bash`, etc.) and Unix-style file paths (`/home/user/`). It does **not** run natively on Windows Command Prompt or PowerShell.
 
 To run on Windows, use **one of these options**:
 
@@ -113,7 +113,7 @@ To run on Windows, use **one of these options**:
 
 ## ☕ Support This Project
 
-OllamaAgent is free and open source. If you find it useful, consider donating to help cover development and server costs. Your support keeps this project alive and improving!
+Ollama-Agent is free and open source. If you find it useful, consider donating to help cover development and server costs. Your support keeps this project alive and improving!
 
 [![PayPal](https://img.shields.io/badge/PayPal-donate-blue)](https://www.paypal.com/donate/?hosted_button_id=P3TK84JYLNUU6)
 
