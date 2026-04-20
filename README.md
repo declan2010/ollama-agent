@@ -76,6 +76,12 @@ ollamaAgent/
 - Write commands (touch, cp, mv, etc.) auto-execute with notification
 - No authentication by default (add reverse proxy for production)
 
+## ☕ Support This Project
+
+OllamaAgent is free and open source. If you find it useful, consider donating to help cover development and server costs. Your support keeps this project alive and improving!
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-donate-orange)](https://buymeacoffee.com/declan2010)
+
 ## Disclaimer
 
 THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT SHALL THE DEVELOPER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE USE OF THIS SOFTWARE. BY INSTALLING AND/OR USING OLLAMAAGENT, YOU ACKNOWLEDGE AND ACCEPT FULL RESPONSIBILITY FOR ANY DAMAGE TO PERSONAL OR CORPORATE DATA, SYSTEMS, OR EQUIPMENT THAT MAY RESULT FROM ITS OPERATION. THE AI AGENT HAS THE ABILITY TO EXECUTE SYSTEM COMMANDS AND MODIFY FILES — USE ENTIRELY AT YOUR OWN RISK.
