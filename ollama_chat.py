@@ -15,7 +15,7 @@ from datetime import datetime
 from flask import Flask, Response, render_template, request, jsonify, session
 
 # --- Configuration ---
-SESSIONS_DIR = os.environ.get('SESSIONS_DIR', '/home/cvc1/sessions')
+SESSIONS_DIR = os.environ.get('SESSIONS_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sessions'))
 DEBUG = os.environ.get('FLASK_DEBUG', 'false').lower() in ('true', '1', 'yes')
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
 KEEP_ALIVE = os.environ.get('OLLAMA_KEEP_ALIVE', '5m')
