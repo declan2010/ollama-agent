@@ -54,7 +54,7 @@ if not os.path.exists(SESSIONS_DIR):
 # --- Sensitive file paths (block reading these) ---
 SENSITIVE_PATHS = [
     '/etc/passwd', '/etc/shadow', '/etc/gshadow', '/etc/group',
-    '/etc/ssh/', '/root/.ssh/', '/home/', '/etc/hosts',
+    '/etc/ssh/', '/root/.ssh/', '/etc/hosts',
     '/etc/sudoers', '/etc/pam.d/', '/var/log/',
     '/proc/', '/sys/', '/dev/',
 ]
@@ -103,7 +103,7 @@ _session_write_permissions = {}
 
 SAFE_COMMANDS = {
     'ls': {'flags': {'-l', '-a', '-la', '-al', '-lh', '-lah', '-R', '-1'},
-            'allow_args': False},
+            'allow_args': True},
     'pwd': {'flags': set(), 'allow_args': False},
     'whoami': {'flags': set(), 'allow_args': False},
     'date': {'flags': set(), 'allow_args': False},
@@ -364,7 +364,7 @@ def get_ollama_models():
                         data=json.dumps({"name": "llama3.2:1b", "stream": False}).encode(),
                         headers={"Content-Type": "application/json"}
                     )
-                    with urllib.request.urlopen(pull_req, timeout=300) as pull_resp:
+                    with urllib.request.urlopen(pull_req, timeout=600) as pull_resp:
                         pull_data = json.loads(pull_resp.read())
                         logger.info("Pulled llama3.2:1b: %s", pull_data.get('status', 'done'))
                     # Refresh model list
@@ -436,7 +436,7 @@ def send_to_ollama(model, messages, tools=None, stream=False):
             headers={'Content-Type': 'application/json'}
         )
 
-        timeout = 300 if stream else 180
+        timeout = 600 if stream else 600
         with urllib.request.urlopen(req, timeout=timeout) as response:
             if stream:
                 return response  # Return the response object for streaming
@@ -794,6 +794,7 @@ def api_chat_stream():
     def generate():
         full_response = ""
         prompt_tokens = 0
+        start_time = time.time()
         try:
             # Prepare messages for Ollama (strip timestamps for API)
             api_messages = []
@@ -823,6 +824,14 @@ def api_chat_stream():
                     'content': msg['content']
                 })
 
+            # If user asks to analyze files, force tool use (not saved to session)
+            _force_keywords = ['analiza', 'revisa', 'explora', 'examina', 'inspecciona',
+                               'analyze', 'review', 'explore', 'examine', 'inspect',
+                               'dime que opinas', 'que opinas', 'analisis', 'analysis']
+            if any(kw in user_message.lower() for kw in _force_keywords):
+                api_messages.insert(1, {'role': 'system',
+                    'content': 'CRITICAL: You MUST use local_command tool. Do NOT describe a plan - execute it. Start with ls -la, then use cat to read files.'})
+
             payload = {
                 'model': model,
                 'messages': api_messages,
@@ -840,7 +849,8 @@ def api_chat_stream():
                 headers={'Content-Type': 'application/json'}
             )
 
-            with urllib.request.urlopen(req, timeout=300) as response:
+            logger.info("Sending request to Ollama model=%s at %s", model, datetime.now().isoformat())
+            with urllib.request.urlopen(req, timeout=600) as response:
                 tool_calls_buffer = []
                 current_tool_call = None
 
@@ -924,11 +934,10 @@ def api_chat_stream():
 
                             # Make follow-up request(s) with tool results
                             # Model may request more tools - limit rounds, then force text response
-                            max_followup_rounds = 5
+                            max_followup_rounds = 8
                             for round_num in range(max_followup_rounds):
                                 logger.info("Follow-up round %d: sending %d tool results back to %s", round_num + 1, len(tool_results), model)
-                                # On rounds 3+, don't send tools so model is forced to answer with text
-                                tools_for_this_round = OLLAMA_TOOLS if round_num < 2 else None
+                                tools_for_this_round = OLLAMA_TOOLS if round_num < 5 else None
                                 followup_result = send_to_ollama(model, followup_messages, tools_for_this_round, stream=False)
                                 logger.info("Follow-up response: content_len=%d, has_tool_calls=%s", len(followup_result.get('message', {}).get('content', '')), bool(followup_result.get('message', {}).get('tool_calls')))
 
@@ -1156,7 +1165,7 @@ def api_chat_stream():
                                 continue
                             full_response += content
                             # Send SSE event
-                            sse_data = json.dumps({'type': 'token', 'content': content})
+                            sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
                             yield f"data: {sse_data}\n\n"
 
                 # If response was empty and no tool calls, try fallback
@@ -1170,7 +1179,7 @@ def api_chat_stream():
                             data=data_bytes,
                             headers={'Content-Type': 'application/json'}
                         )
-                        with urllib.request.urlopen(req2, timeout=300) as response2:
+                        with urllib.request.urlopen(req2, timeout=600) as response2:
                             for line in response2:
                                 line = line.decode('utf-8').strip()
                                 if not line:
@@ -1185,7 +1194,7 @@ def api_chat_stream():
                                 content = chunk.get('message', {}).get('content', '')
                                 if content:
                                     full_response += content
-                                    sse_data = json.dumps({'type': 'token', 'content': content})
+                                    sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
                                     yield f"data: {sse_data}\n\n"
 
         except Exception as e:
@@ -1205,7 +1214,8 @@ def api_chat_stream():
         session_data['messages'].append({
             'role': 'assistant',
             'content': full_response,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'elapsed': round(time.time() - start_time, 2)
         })
         # Save context usage in session for per-conversation display
         session_data['context_usage'] = prompt_tokens
@@ -1227,7 +1237,8 @@ def api_chat_stream():
                     break  # Only offer once
 
         # Send completion event
-        yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens})}\n\n"
+        elapsed = round(time.time() - start_time, 2)
+        yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed})}\n\n"
 
     return Response(generate(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
@@ -1321,6 +1332,7 @@ def api_chat():
         'timestamp': datetime.now().isoformat()
     })
 
+    start_time = time.time()
     logger.info("Chat request: model=%s, msg_len=%d, session=%s", model, len(user_message), current_chat_id)
 
     # Use Ollama tools (no regex-based command detection)
@@ -1340,7 +1352,8 @@ def api_chat():
     session_data['messages'].append({
         'role': 'assistant',
         'content': response_text,
-        'timestamp': datetime.now().isoformat()
+        'timestamp': datetime.now().isoformat(),
+        'elapsed': round(time.time() - start_time, 2)
     })
     session_data['context_usage'] = prompt_tokens
     save_session(current_chat_id, session_data)

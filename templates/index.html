@@ -404,6 +404,36 @@
             border-top-right-radius: 5px;
         }
 
+        .message {
+            position: relative;
+        }
+
+        .msg-meta {
+            position: absolute;
+            top: -12px;
+            right: -8px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2px 10px;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            opacity: 0.8;
+            z-index: 2;
+            transition: opacity 0.2s;
+        }
+
+        .message:hover .msg-meta {
+            opacity: 1;
+        }
+
+        .message.user .msg-meta {
+            right: auto;
+            left: -8px;
+            background: var(--bg-tertiary);
+        }
+
         /* Markdown rendering styles */
         .message-content h1, .message-content h2, .message-content h3,
         .message-content h4, .message-content h5, .message-content h6 {
@@ -934,13 +964,13 @@
                 <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 20px;">This command will modify files or system state.</p>
                 <div style="display: flex; flex-direction: column; gap: 10px;">
                     <button onclick="handleWritePermission('session')" style="background: #22c55e; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: bold;">
-                        Allow all this session
+                        \u2705 Acceso total en esta conversaci\u00f3n
                     </button>
                     <button onclick="handleWritePermission('once')" style="background: #f59e0b; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: bold;">
-                        Allow once
+                        \u21aa Solo esta vez
                     </button>
                     <button onclick="handleWritePermission('deny')" style="background: #ef4444; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: bold;">
-                        Deny
+                        \u274c Denegar
                     </button>
                 </div>
             </div>
@@ -1422,7 +1452,7 @@
 
                 if (data.messages && data.messages.length > 0) {
                     data.messages.forEach(msg => {
-                        addMessageToUI(msg.role, msg.content);
+                        addMessageToUI(msg.role, msg.content, msg.elapsed);
                     });
                 } else {
                     chatArea.innerHTML = `
@@ -1501,6 +1531,10 @@
                 // Remove streaming placeholder
                 const streamEl = document.getElementById('streaming-message');
                 if (streamEl) streamEl.remove();
+                // Show error if it's a timeout
+                if (e.name === 'AbortError') {
+                    if (contentEl) contentEl.innerHTML = renderMarkdown('**Error:** Request timed out (5 min)');
+                }
                 // Fall back to regular request
                 await sendRegularMessage(message);
             }
@@ -1510,7 +1544,12 @@
             const contentEl = document.querySelector('#streaming-message .message-content');
             let fullResponse = '';
 
-            try {
+            const reqStartTime = Date.now();
+            console.log('[TIMING] Request started at', new Date().toISOString());
+            let _elapsed = null;
+            const ctrl = new AbortController();
+            const timeoutId = setTimeout(() => ctrl.abort(), 600000);
+            try {  // 5 min timeout
                 const response = await fetch('/api/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1518,8 +1557,10 @@
                         message: message,
                         model: modelSelect.value,
                         fallback_model: fallbackModelSelect.value
-                    })
+                    }),
+                    signal: ctrl.signal
                 });
+                clearTimeout(timeoutId);
 
                 if (!response.ok) {
                     const errData = await response.json().catch(() => ({}));
@@ -1591,6 +1632,11 @@
                                 if (data.context_usage !== undefined) {
                                     updateContextIndicator(data.context_usage);
                                 }
+                                // Save elapsed time for later
+                                if (data.elapsed !== undefined) {
+                                    _elapsed = data.elapsed;
+                                    console.log('[TIMING] Elapsed:', data.elapsed, 's');
+                                }
                                 // Update model status after response (model is now loaded)
                                 checkModelStatus();
                             }
@@ -1600,11 +1646,11 @@
                     }
                 }
             } catch (e) {
-                if (!fullResponse) {
-                    if (contentEl) {
-                        contentEl.innerHTML = renderMarkdown(`**Error:** ${e.message}`);
-                        addCopyButtons(contentEl);
-                    }
+                clearTimeout(timeoutId);
+                const errMsg = e.name === 'AbortError' ? 'Request timed out (5 min). The model may be too slow.' : e.message;
+                if (contentEl) {
+                    contentEl.innerHTML = renderMarkdown(`**Error:** ${errMsg}`);
+                    addCopyButtons(contentEl);
                 }
             }
 
@@ -1621,7 +1667,12 @@
 
             // Add final message using normal rendering
             if (fullResponse) {
-                addMessageToUI('assistant', fullResponse);
+                let elapsedVal = null;
+                if (_elapsed !== null) {
+                    elapsedVal = _elapsed;
+                    _elapsed = null;
+                }
+                addMessageToUI('assistant', fullResponse, elapsedVal);
             }
 
             isWaiting = false;
@@ -1674,7 +1725,15 @@
             }
         }
 
-        function addMessageToUI(role, content) {
+        function formatElapsed(sec) {
+            if (sec === undefined || sec === null) return null;
+            const m = Math.floor(sec / 60);
+            const s = Math.round(sec % 60);
+            if (m > 0) return m + 'm ' + s + 's';
+            return s + 's';
+        }
+
+        function addMessageToUI(role, content, elapsed) {
             const welcome = chatArea.querySelector('.welcome-message');
             if (welcome) welcome.remove();
 
@@ -1690,6 +1749,13 @@
                 <div class="message-avatar ${avatarClass}">${avatar}</div>
                 <div class="message-content">${renderedContent}</div>
             `;
+
+            if (elapsed !== undefined && elapsed !== null) {
+                const meta = document.createElement('div');
+                meta.className = 'msg-meta';
+                meta.textContent = '⏱ ' + formatElapsed(elapsed);
+                messageDiv.appendChild(meta);
+            }
 
             chatArea.appendChild(messageDiv);
             addCopyButtons(messageDiv.querySelector('.message-content'));

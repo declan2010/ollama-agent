@@ -1511,6 +1511,8 @@
             let fullResponse = '';
 
             try {
+                const ctrl = new AbortController();
+                const timeoutId = setTimeout(() => ctrl.abort(), 300000);  // 5 min timeout
                 const response = await fetch('/api/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1518,8 +1520,10 @@
                         message: message,
                         model: modelSelect.value,
                         fallback_model: fallbackModelSelect.value
-                    })
+                    }),
+                    signal: ctrl.signal
                 });
+                clearTimeout(timeoutId);
 
                 if (!response.ok) {
                     const errData = await response.json().catch(() => ({}));
@@ -1591,6 +1595,16 @@
                                 if (data.context_usage !== undefined) {
                                     updateContextIndicator(data.context_usage);
                                 }
+                                // Show elapsed time
+                                if (data.elapsed !== undefined) {
+                                    const lastMsg = chatArea.querySelector('.message:last-child .message-content');
+                                    if (lastMsg) {
+                                        const ts = document.createElement('div');
+                                        ts.style.cssText = 'margin-top:8px;padding:4px 10px;background:rgba(100,100,100,0.15);border-radius:4px;font-size:0.75rem;color:var(--text-secondary);';
+                                        ts.textContent = '⏱ ' + data.elapsed + 's';
+                                        lastMsg.appendChild(ts);
+                                    }
+                                }
                                 // Update model status after response (model is now loaded)
                                 checkModelStatus();
                             }
@@ -1600,9 +1614,11 @@
                     }
                 }
             } catch (e) {
+                clearTimeout(timeoutId);
+                const errMsg = e.name === 'AbortError' ? 'Request timed out (5 min). The model may be too slow.' : e.message;
                 if (!fullResponse) {
                     if (contentEl) {
-                        contentEl.innerHTML = renderMarkdown(`**Error:** ${e.message}`);
+                        contentEl.innerHTML = renderMarkdown(`**Error:** ${errMsg}`);
                         addCopyButtons(contentEl);
                     }
                 }
