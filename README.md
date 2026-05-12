@@ -1,5 +1,7 @@
 # 🤖 Ollama-Agent
 
+[![PayPal](https://img.shields.io/badge/PayPal-donate-blue)](https://www.paypal.com/donate/?hosted_button_id=P3TK84JYLNUU6)
+
 **by Declan2010**
 
 A web-based AI agent for Ollama with web search, local command execution, and file management capabilities.
