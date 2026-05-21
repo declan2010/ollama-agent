@@ -233,6 +233,60 @@
             background: var(--bg-secondary);
         }
 
+        .model-selector.force-agent-selector {
+            gap: 6px;
+        }
+
+        .model-selector.force-agent-selector input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .model-selector.active-model select {
+            border: 2px solid #4CAF50;
+            box-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
+        }
+
+        .model-selector.active-model label {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+
+        .model-selector.active-model select {
+            background: rgba(76, 175, 80, 0.1);
+        }
+
+        .used-model-badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            color: #a78bfa;
+            background: rgba(167, 139, 250, 0.12);
+            border: 1px solid rgba(167, 139, 250, 0.3);
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-top: 6px;
+        }
+
+        .escalated-notification {
+            display: inline-block;
+            font-size: 0.75rem;
+            color: #f59e0b;
+            background: rgba(245, 158, 11, 0.12);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            padding: 4px 10px;
+            border-radius: 10px;
+            margin-top: 6px;
+            animation: fadeOut 3s ease-in forwards;
+        }
+
+        @keyframes fadeOut {
+            0% { opacity: 1; }
+            70% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+
         .context-indicator {
             font-size: 0.8rem;
             color: var(--text-secondary);
@@ -402,36 +456,6 @@
             background: var(--bg-tertiary);
             border-top-left-radius: 15px;
             border-top-right-radius: 5px;
-        }
-
-        .message {
-            position: relative;
-        }
-
-        .msg-meta {
-            position: absolute;
-            top: -12px;
-            right: -8px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 2px 10px;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            white-space: nowrap;
-            opacity: 0.8;
-            z-index: 2;
-            transition: opacity 0.2s;
-        }
-
-        .message:hover .msg-meta {
-            opacity: 1;
-        }
-
-        .message.user .msg-meta {
-            right: auto;
-            left: -8px;
-            background: var(--bg-tertiary);
         }
 
         /* Markdown rendering styles */
@@ -840,7 +864,15 @@
         <div class="header">
             <div class="header-left">
                 <div class="model-selector">
-                    <label>Model:</label>
+                    <label>Chat:</label>
+                    <select id="baseModelSelect">
+                        {% for model in models %}
+                        <option value="{{ model }}" {% if model == base_chat_model %}selected{% endif %}>{{ model }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="model-selector">
+                    <label>Advanced:</label>
                     <select id="modelSelect">
                         {% for model in models %}
                         <option value="{{ model }}" {% if model == current_model %}selected{% endif %}>{{ model }}</option>
@@ -855,6 +887,10 @@
                         <option value="{{ model }}">{{ model }}</option>
                         {% endfor %}
                     </select>
+                </div>
+                <div class="model-selector force-agent-selector">
+                    <label for="forceAgentCheckbox" style="cursor:pointer;">Force&nbsp;Advanced</label>
+                    <input type="checkbox" id="forceAgentCheckbox">
                 </div>
                 <div class="context-indicator" id="contextIndicator">
                     <div class="context-bar-bg"><div class="context-bar-fill" id="contextBar" style="width: 0%"></div></div>
@@ -989,6 +1025,8 @@
         const stopBtn = document.getElementById('stopBtn');
         const modelSelect = document.getElementById('modelSelect');
         const fallbackModelSelect = document.getElementById('fallbackModelSelect');
+        const baseModelSelect = document.getElementById('baseModelSelect');
+        const forceAgentCheckbox = document.getElementById('forceAgentCheckbox');
         const typingIndicator = document.getElementById('typingIndicator');
 
         // Configure marked for markdown rendering
@@ -1047,14 +1085,34 @@
 
         // Load saved preferences
         function loadPreferences() {
+            const savedModel = localStorage.getItem('ollama-agent-model');
+            if (savedModel) {
+                modelSelect.value = savedModel;
+            }
             const savedFallback = localStorage.getItem('ollama-agent-fallback');
             if (savedFallback) {
                 fallbackModelSelect.value = savedFallback;
+            }
+            const savedBaseModel = localStorage.getItem('ollama-agent-base-model');
+            if (savedBaseModel) {
+                baseModelSelect.value = savedBaseModel;
+            }
+            const savedForceAdvanced = localStorage.getItem('ollama-agent-force-advanced');
+            if (savedForceAdvanced === 'true') {
+                forceAgentCheckbox.checked = true;
             }
         }
 
         fallbackModelSelect.addEventListener('change', function() {
             localStorage.setItem('ollama-agent-fallback', this.value);
+        });
+
+        baseModelSelect.addEventListener('change', function() {
+            localStorage.setItem('ollama-agent-base-model', this.value);
+        });
+
+        forceAgentCheckbox.addEventListener('change', function() {
+            localStorage.setItem('ollama-agent-force-advanced', this.checked);
         });
 
         // Update context indicator with visual bar
@@ -1122,6 +1180,7 @@
         }
 
         modelSelect.addEventListener('change', function() {
+            localStorage.setItem('ollama-agent-model', this.value);
             updateContextIndicator(0);
             checkModelStatus();
             // Save model to current session
@@ -1452,7 +1511,7 @@
 
                 if (data.messages && data.messages.length > 0) {
                     data.messages.forEach(msg => {
-                        addMessageToUI(msg.role, msg.content, msg.elapsed);
+                        addMessageToUI(msg.role, msg.content);
                     });
                 } else {
                     chatArea.innerHTML = `
@@ -1531,10 +1590,6 @@
                 // Remove streaming placeholder
                 const streamEl = document.getElementById('streaming-message');
                 if (streamEl) streamEl.remove();
-                // Show error if it's a timeout
-                if (e.name === 'AbortError') {
-                    if (contentEl) contentEl.innerHTML = renderMarkdown('**Error:** Request timed out (5 min)');
-                }
                 // Fall back to regular request
                 await sendRegularMessage(message);
             }
@@ -1544,19 +1599,20 @@
             const contentEl = document.querySelector('#streaming-message .message-content');
             let fullResponse = '';
 
-            const reqStartTime = Date.now();
-            console.log('[TIMING] Request started at', new Date().toISOString());
-            let _elapsed = null;
-            const ctrl = new AbortController();
-            const timeoutId = setTimeout(() => ctrl.abort(), 600000);
-            try {  // 5 min timeout
+            try {
+                const reqStartTime = Date.now();
+                console.log('[TIMING] Request started at', new Date().toISOString());
+                const ctrl = new AbortController();
+                const timeoutId = setTimeout(() => ctrl.abort(), 300000);  // 5 min timeout
                 const response = await fetch('/api/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         message: message,
                         model: modelSelect.value,
-                        fallback_model: fallbackModelSelect.value
+                        fallback_model: fallbackModelSelect.value,
+                        base_model: baseModelSelect.value,
+                        force_advanced: forceAgentCheckbox.checked
                     }),
                     signal: ctrl.signal
                 });
@@ -1628,14 +1684,59 @@
                                     contentEl.innerHTML = renderMarkdown(fullResponse);
                                     addCopyButtons(contentEl);
                                 }
+                            } else if (data.type === 'escalated') {
+                                // Query was escalated to the advanced model
+                                const streamEl = document.querySelector('#streaming-message .message-content');
+                                const lastMsg = chatArea.querySelector('.message:last-child .message-content');
+                                const target = streamEl || lastMsg;
+                                if (target) {
+                                    const notif = document.createElement('div');
+                                    notif.className = 'escalated-notification';
+                                    notif.textContent = '⬆ Escalated to ' + (data.advanced_model || 'advanced model');
+                                    target.appendChild(notif);
+                                    // Auto-remove after animation
+                                    setTimeout(() => notif.remove(), 3500);
+                                }
                             } else if (data.type === 'done') {
                                 if (data.context_usage !== undefined) {
                                     updateContextIndicator(data.context_usage);
                                 }
-                                // Save elapsed time for later
+                                // Show elapsed time
                                 if (data.elapsed !== undefined) {
-                                    _elapsed = data.elapsed;
+                                    const streamEl = document.querySelector('#streaming-message .message-content');
+                                    const lastMsg = chatArea.querySelector('.message:last-child .message-content');
+                                    const target = streamEl || lastMsg;
+                                    if (target) {
+                                        const ts = document.createElement('div');
+                                        ts.style.cssText = 'margin-top:8px;padding:4px 10px;background:rgba(100,100,100,0.15);border-radius:4px;font-size:0.75rem;color:var(--text-secondary);display:inline-block;';
+                                        ts.textContent = '⏱ ' + data.elapsed + 's';
+                                        target.appendChild(ts);
+                                    }
                                     console.log('[TIMING] Elapsed:', data.elapsed, 's');
+                                }
+                                // Show which model actually responded
+                                if (data.used_model) {
+                                    const streamEl = document.querySelector('#streaming-message .message-content');
+                                    const lastMsg = chatArea.querySelector('.message:last-child .message-content');
+                                    const target = streamEl || lastMsg;
+                                    if (target) {
+                                        const badge = document.createElement('span');
+                                        badge.className = 'used-model-badge';
+                                        badge.textContent = '🤖 ' + data.used_model;
+                                        target.appendChild(badge);
+                                    }
+                                    // Highlight the active model selector
+                                    document.querySelectorAll('.model-selector').forEach(el => el.classList.remove('active-model'));
+                                    const baseVal = baseModelSelect.value;
+                                    const advVal = modelSelect.value;
+                                    const backVal = fallbackModelSelect ? fallbackModelSelect.value : '';
+                                    if (data.used_model === baseVal) {
+                                        baseModelSelect.closest('.model-selector').classList.add('active-model');
+                                    } else if (data.used_model === advVal) {
+                                        modelSelect.closest('.model-selector').classList.add('active-model');
+                                    } else if (data.used_model === backVal) {
+                                        fallbackModelSelect.closest('.model-selector').classList.add('active-model');
+                                    }
                                 }
                                 // Update model status after response (model is now loaded)
                                 checkModelStatus();
@@ -1651,7 +1752,12 @@
                 if (contentEl) {
                     contentEl.innerHTML = renderMarkdown(`**Error:** ${errMsg}`);
                     addCopyButtons(contentEl);
+                    const ts = document.createElement('div');
+                    ts.style.cssText = 'margin-top:8px;padding:4px 10px;background:rgba(255,0,0,0.1);border-radius:4px;font-size:0.75rem;color:#ef4444;display:inline-block;';
+                    ts.textContent = '⏱ timed out';
+                    contentEl.appendChild(ts);
                 }
+                console.log('[TIMING] Error:', e.name, e.message);
             }
 
             // Remove streaming cursor
@@ -1667,12 +1773,7 @@
 
             // Add final message using normal rendering
             if (fullResponse) {
-                let elapsedVal = null;
-                if (_elapsed !== null) {
-                    elapsedVal = _elapsed;
-                    _elapsed = null;
-                }
-                addMessageToUI('assistant', fullResponse, elapsedVal);
+                addMessageToUI('assistant', fullResponse);
             }
 
             isWaiting = false;
@@ -1691,7 +1792,9 @@
                     body: JSON.stringify({
                         message: message,
                         model: modelSelect.value,
-                        fallback_model: fallbackModelSelect.value
+                        fallback_model: fallbackModelSelect.value,
+                        base_model: baseModelSelect.value,
+                        force_advanced: forceAgentCheckbox.checked
                     })
                 });
 
@@ -1725,15 +1828,7 @@
             }
         }
 
-        function formatElapsed(sec) {
-            if (sec === undefined || sec === null) return null;
-            const m = Math.floor(sec / 60);
-            const s = Math.round(sec % 60);
-            if (m > 0) return m + 'm ' + s + 's';
-            return s + 's';
-        }
-
-        function addMessageToUI(role, content, elapsed) {
+        function addMessageToUI(role, content) {
             const welcome = chatArea.querySelector('.welcome-message');
             if (welcome) welcome.remove();
 
@@ -1749,13 +1844,6 @@
                 <div class="message-avatar ${avatarClass}">${avatar}</div>
                 <div class="message-content">${renderedContent}</div>
             `;
-
-            if (elapsed !== undefined && elapsed !== null) {
-                const meta = document.createElement('div');
-                meta.className = 'msg-meta';
-                meta.textContent = '⏱ ' + formatElapsed(elapsed);
-                messageDiv.appendChild(meta);
-            }
 
             chatArea.appendChild(messageDiv);
             addCopyButtons(messageDiv.querySelector('.message-content'));

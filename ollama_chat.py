@@ -19,6 +19,7 @@ SESSIONS_DIR = os.environ.get('SESSIONS_DIR', os.path.join(os.path.dirname(os.pa
 DEBUG = os.environ.get('FLASK_DEBUG', 'false').lower() in ('true', '1', 'yes')
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
 KEEP_ALIVE = os.environ.get('OLLAMA_KEEP_ALIVE', '5m')
+BASE_CHAT_MODEL = "gemma4:e4b"
 
 # --- Logging ---
 logging.basicConfig(
@@ -364,7 +365,7 @@ def get_ollama_models():
                         data=json.dumps({"name": "llama3.2:1b", "stream": False}).encode(),
                         headers={"Content-Type": "application/json"}
                     )
-                    with urllib.request.urlopen(pull_req, timeout=600) as pull_resp:
+                    with urllib.request.urlopen(pull_req, timeout=300) as pull_resp:
                         pull_data = json.loads(pull_resp.read())
                         logger.info("Pulled llama3.2:1b: %s", pull_data.get('status', 'done'))
                     # Refresh model list
@@ -436,7 +437,7 @@ def send_to_ollama(model, messages, tools=None, stream=False):
             headers={'Content-Type': 'application/json'}
         )
 
-        timeout = 600 if stream else 600
+        timeout = 300 if stream else 180
         with urllib.request.urlopen(req, timeout=timeout) as response:
             if stream:
                 return response  # Return the response object for streaming
@@ -710,7 +711,8 @@ def index():
     return render_template('index.html',
                            models=models,
                            sessions=sessions,
-                           current_model=session.get('model', ''))
+                           current_model=session.get('model', ''),
+                           base_chat_model=BASE_CHAT_MODEL)
 
 
 @app.route('/api/models')
@@ -747,6 +749,154 @@ def api_model_info():
     return jsonify(info)
 
 
+@app.route('/api/models/base', methods=['GET'])
+def api_base_model_info():
+    """Check if base chat model is available"""
+    try:
+        import urllib.request as _urllib_base_info
+        resp = _urllib_base_info.urlopen(f'{OLLAMA_BASE_URL}/api/ps')
+        loaded = json.loads(resp.read().decode('utf-8'))
+        loaded_names = [m['name'] for m in loaded.get('models', [])]
+        base_model = request.args.get('base_model', BASE_CHAT_MODEL)
+        is_loaded = any(base_model == m or base_model + ':latest' == m for m in loaded_names)
+        return jsonify({'model': base_model, 'loaded': is_loaded})
+    except Exception as e:
+        return jsonify({'model': BASE_CHAT_MODEL, 'loaded': None, 'error': str(e)})
+
+
+@app.route('/api/config', methods=['GET'])
+def api_config():
+    """Return app configuration including base chat model"""
+    return jsonify({
+        'base_chat_model': BASE_CHAT_MODEL,
+    })
+
+
+def _likely_needs_tools(message):
+    """Heuristic: detect if user message likely needs tool use.
+    Comprehensive Spanish + English keyword matching."""
+    msg_lower = message.lower()
+    
+    # Analysis/review keywords
+    analysis_keywords = [
+        # Spanish
+        'analiza', 'analizar', 'análisis', 'analisis', 'revisa', 'revisar', 'revisión',
+        'explora', 'explorar', 'examina', 'examinar', 'inspecciona', 'inspeccionar',
+        'evalúa', 'evaluar', 'diagnostica', 'diagnosticar', 'compara', 'comparar',
+        'interpreta', 'interpretar', 'resume', 'resumir', 'sintetiza', 'sintetizar',
+        'dime que opinas', 'que opinas', 'opinión', 'que piensas', 'que pense',
+        'dime qué piensas', 'dime que piensas', 'dame tu opinión',
+        'explica por qué', 'por qué pasa', 'cómo funciona', 'qué significa',
+        # English
+        'analyze', 'analyse', 'analysis', 'review', 'explore', 'examine', 'inspect',
+        'evaluate', 'assess', 'diagnose', 'compare', 'contrast', 'interpret',
+        'summarize', 'synthesise', 'synthesize', 'what do you think', 'your opinion',
+        'what\'s your take', 'give me your thoughts', 'break down', 'make sense of',
+        'why does', 'how does', 'what does it mean', 'deep dive', 'dive into',
+    ]
+    if any(kw in msg_lower for kw in analysis_keywords):
+        return True
+    
+    # File/system/code operations
+    file_keywords = [
+        # Spanish
+        'archivo', 'carpeta', 'directorio', 'borrar', 'eliminar', 'editar',
+        'modificar', 'cambiar', 'escribir', 'guardar', 'crear archivo',
+        'instalar', 'ejecutar', 'correr', 'comando', 'terminal', 'consola',
+        'escribí un script', 'haz un script', 'crea un script', 'genera un script',
+        'haz un programa', 'crea un programa', 'programa un', 'codifica', 'codificar',
+        'lee el archivo', 'muestra el archivo', 'abre el archivo', 'cierra el archivo',
+        'listar archivos', 'mover archivo', 'copiar archivo', 'renombrar',
+        'compilar', 'deployar', 'desplegar', 'subir al server', 'git push',
+        'commit', 'hacer commit', 'base de datos', 'sql', 'query',
+        'permisos', 'chmod', 'proceso', 'matar proceso', 'kill process',
+        # English
+        'file', 'folder', 'directory', 'delete', 'remove', 'edit', 'modify',
+        'write', 'save', 'create file', 'install', 'execute', 'run', 'command',
+        'terminal', 'shell', 'bash', 'script', 'write a script', 'create a script',
+        'code up', 'code this', 'program this', 'implement', 'build a tool',
+        'read the file', 'show me the file', 'open the file', 'cat ', 'ls ',
+        'grep ', 'head ', 'tail ', 'list files', 'move file', 'copy file',
+        'rename', 'compile', 'deploy', 'push to', 'git commit', 'database',
+        'sql', 'query', 'permissions', 'chmod', 'process', 'kill process',
+    ]
+    if any(kw in msg_lower for kw in file_keywords):
+        return True
+    
+    # Web/search/information retrieval
+    search_keywords = [
+        # Spanish
+        'buscar', 'busca', 'búsqueda', 'buscar en internet', 'buscar en la web',
+        'buscar en', 'buscame', 'encontrar información', 'encontrar datos',
+        'noticias', 'noticia', 'las noticias', 'las últimas noticias',
+        'consulta', 'consultar', 'información sobre', 'info sobre',
+        'qué pasó', 'que pasó', 'qué está pasando', 'que esta pasando',
+        'últimas', 'actualidad', 'noticias del día', 'noticias de hoy',
+        'noticias recientes', 'titulares', 'periódico', 'prensa',
+        'clima', 'el clima', 'pronóstico', 'temperatura', 'llueve', 'lluvia',
+        'precio', 'precios', 'cotización', 'cotizar', 'valor de', 'cuánto cuesta',
+        'dónde queda', 'dónde está', 'ubicación', 'dirección de',
+        'horario de', 'a qué hora', 'cuándo es', 'fecha de',
+        'quién es', 'quién fue', 'quién ganó', 'quién inventó',
+        'cómo se llama', 'cuántos', 'cuántas', 'en qué año',
+        'qué es', 'qué significa', 'define', 'definir', 'definición',
+        'traducir', 'traducción', 'traduce',
+        'receta', 'recetas', 'cómo se hace', 'cómo se prepara',
+        'resultado', 'resultados', 'marcador', 'score', 'goles',
+        'calcular', 'conversión', 'convertir', 'cuánto es',
+        # English
+        'search', 'search for', 'search the web', 'web search', 'google',
+        'look up', 'lookup', 'find information', 'find data',
+        'news', 'the news', 'latest news', 'recent news', 'today\'s news',
+        'current events', 'headlines', 'newspaper', 'press',
+        'weather', 'forecast', 'temperature', 'rain', 'snow', 'sunny',
+        'price', 'prices', 'how much does', 'cost of', 'exchange rate',
+        'where is', 'location of', 'address of', 'directions to',
+        'hours of', 'schedule', 'when is', 'date of',
+        'who is', 'who was', 'who won', 'who invented',
+        'what is', 'what does', 'define', 'definition of',
+        'translate', 'translation', 'how do you say',
+        'recipe', 'recipes', 'how to make', 'how to prepare',
+        'score', 'scores', 'game result', 'game results',
+        'calculate', 'conversion', 'convert', 'how much is',
+        'tell me about', 'what happened', 'what\'s happening',
+        'latest', 'update', 'updates', 'trending',
+    ]
+    if any(kw in msg_lower for kw in search_keywords):
+        return True
+    
+    # Data/math/computation
+    data_keywords = [
+        # Spanish
+        'gráfico', 'gráfica', 'tabla', 'estadística', 'datos', 'dataset',
+        'cálculo', 'calcular', 'fórmula', 'ecuación', 'porcentaje',
+        'promedio', 'media', 'mediana', 'varianza',
+        # English
+        'chart', 'graph', 'plot', 'table', 'statistics', 'data', 'dataset',
+        'calculate', 'computation', 'formula', 'equation', 'percentage',
+        'average', 'mean', 'median', 'variance', 'correlation',
+    ]
+    if any(kw in msg_lower for kw in data_keywords):
+        return True
+    
+    # Creation/generation tasks
+    creation_keywords = [
+        # Spanish
+        'genera', 'generar', 'crea', 'crear', 'diseña', 'diseñar',
+        'escribe', 'escribir', 'redacta', 'redactar', 'produce', 'producir',
+        'construye', 'construir', 'arma', 'armar', 'desarrolla', 'desarrollar',
+        'haz una lista', 'haz una tabla', 'haz un resumen', 'haz un informe',
+        # English
+        'generate', 'create', 'design', 'write', 'draft', 'compose',
+        'produce', 'build', 'develop', 'make a list', 'make a table',
+        'make a summary', 'make a report', 'put together',
+    ]
+    if any(kw in msg_lower for kw in creation_keywords):
+        return True
+    
+    return False
+
+
 @app.route('/api/chat/stream', methods=['POST'])
 def api_chat_stream():
     """Streaming chat endpoint using SSE"""
@@ -754,6 +904,10 @@ def api_chat_stream():
     user_message = data.get('message', '').strip()
     model = data.get('model', session.get('model', 'llama3'))
     fallback_model = data.get('fallback_model', '')
+    base_model = data.get('base_model', '')
+    force_advanced = data.get('force_advanced', False)
+    if not base_model:
+        base_model = BASE_CHAT_MODEL
 
     if not user_message:
         return jsonify({'error': 'Empty message'}), 400
@@ -795,6 +949,7 @@ def api_chat_stream():
         full_response = ""
         prompt_tokens = 0
         start_time = time.time()
+        used_model = model  # Track which model actually responds
         try:
             # Prepare messages for Ollama (strip timestamps for API)
             api_messages = []
@@ -805,13 +960,14 @@ def api_chat_stream():
                 'gemma': 'You have access to local_command, web_search, and fetch_article tools. Use them proactively.',
                 'kimi': 'Use the available tools for file operations and web searches. Do not just show code.',
                 'qwen': 'Always use local_command tool for writing files. Use cat > with heredoc syntax.',
+                'deepseek': 'Use the available tools for file operations and web searches. Do not just show code. Always use local_command tool to write/edit files.',
             }
             model_hint = ''
             for key, hint in MODEL_HINTS.items():
                 if key in model.lower():
                     model_hint = hint
                     break
-            system_content = 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- Write operations will be executed automatically with user notification'
+            system_content = 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model
             if model_hint:
                 system_content += '\n\n' + model_hint
             api_messages.append({
@@ -832,6 +988,139 @@ def api_chat_stream():
                 api_messages.insert(1, {'role': 'system',
                     'content': 'CRITICAL: You MUST use local_command tool. Do NOT describe a plan - execute it. Start with ls -la, then use cat to read files.'})
 
+            # --- Base model routing: try simpler model first for simple conversations ---
+            base_model_succeeded = False
+            if not force_advanced and not _likely_needs_tools(user_message):
+                try:
+                    import urllib.request as _urllib_base
+                    # Build simpler messages for base model (no tools, simpler system prompt)
+                    base_api_messages = [{'role': 'system', 'content': 'You are a helpful assistant.'}]
+                    for msg in session_data['messages']:
+                        base_api_messages.append({
+                            'role': msg['role'],
+                            'content': msg['content']
+                        })
+                    base_payload = {
+                        'model': base_model,
+                        'messages': base_api_messages,
+                        'stream': True,
+                        'keep_alive': KEEP_ALIVE,
+                    }
+                    base_data_bytes = json.dumps(base_payload).encode('utf-8')
+                    base_req = _urllib_base.Request(
+                        f'{OLLAMA_BASE_URL}/api/chat',
+                        data=base_data_bytes,
+                        headers={'Content-Type': 'application/json'}
+                    )
+                    logger.info("Trying base model %s for simple query (len=%d)", base_model, len(user_message))
+                    base_full_response = ""
+                    base_prompt_tokens = 0
+                    with _urllib_base.urlopen(base_req) as base_response:
+                        for base_line in base_response:
+                            base_line = base_line.decode('utf-8').strip()
+                            if not base_line:
+                                continue
+                            try:
+                                base_chunk = json.loads(base_line)
+                            except json.JSONDecodeError:
+                                continue
+                            if base_chunk.get('done'):
+                                base_prompt_tokens = base_chunk.get('prompt_eval_count', 0)
+                                break
+                            base_content = base_chunk.get('message', {}).get('content', '')
+                            if base_content:
+                                base_full_response += base_content
+                                sse_data = json.dumps({'type': 'token', 'content': base_content, 'ts': round(time.time() - start_time, 2)})
+                                yield f"data: {sse_data}\n\n"
+
+                    # Evaluate base model response quality
+                    base_stripped = base_full_response.strip()
+                    # Check if response tried to use a tool but couldn't (common patterns)
+                    tool_attempt_patterns = ['local_command', 'web_search', 'fetch_article', 'tool_call', '<tool>', '[tool]']
+                    looks_like_tool_attempt = any(p in base_stripped for p in tool_attempt_patterns)
+
+                    # Check if response is a weak/ignorant answer that should escalate
+                    weak_answer_patterns = [
+                        # Spanish ignorance patterns
+                        'no sé', 'no se', 'no tengo información', 'no tengo datos',
+                        'no estoy seguro', 'no puedo помочь', 'no puedo responder',
+                        'no estoy capacitado', 'no tengo acceso', 'no tengo conocimiento',
+                        'desconozco', 'ignoro', 'no lo sé', 'no lo se',
+                        'no tengo manera de', 'no estoy actualizado', 'no tengo forma de',
+                        'mis conocimientos no', 'mi conocimiento no', 'no estoy al tanto',
+                        'no puedo proporcionar', 'no puedo dar', 'no puedo acceder',
+                        'no tengo manera', 'fuera de mi', 'más allá de mi',
+                        'no tengo conexión', 'no tengo internet', 'no puedo buscar',
+                        # English ignorance patterns
+                        "i don't know", 'i do not know', "i'm not sure", 'i am not sure',
+                        "i can't help", 'i cannot help', "i'm unable", 'i am unable',
+                        "i don't have", 'i do not have', "i'm not aware", 'i am not aware',
+                        "i don't have access", 'i cannot access', "i don't have information",
+                        'i have no knowledge', "i'm not familiar", 'i am not familiar',
+                        "i can't provide", 'i cannot provide', "i can't answer",
+                        'i cannot answer', "i don't have the ability",
+                        "i can't search", 'i cannot search', "i can't look up",
+                        'out of my knowledge', 'beyond my knowledge', 'beyond my capabilities',
+                        'beyond my scope', "i don't have real-time", "i don't have current",
+                        'i have no way', "i can't verify", 'i cannot verify',
+                        'not something i can', "i'm not able", 'i am not able',
+                        # Repetitive/loop patterns (model stuck)
+                        'as an ai', 'as a language model', 'como modelo de lenguaje',
+                        'como inteligencia artificial', 'como ia', 'como I.A.',
+                    ]
+                    base_lower = base_stripped.lower()
+                    is_weak_answer = any(p in base_lower for p in weak_answer_patterns)
+
+                    if base_stripped and len(base_stripped) >= 10 and not looks_like_tool_attempt and not is_weak_answer:
+                        # Base model succeeded - use its response
+                        full_response = base_full_response
+                        prompt_tokens = base_prompt_tokens
+                        used_model = base_model
+                        base_model_succeeded = True
+                        logger.info("Base model %s succeeded (response len=%d)", base_model, len(base_stripped))
+                    else:
+                        # Escalate to advanced model
+                        reason = 'weak_answer' if is_weak_answer else ('tool_attempt' if looks_like_tool_attempt else 'too_short')
+                        logger.info("Base model %s response insufficient (len=%d, tool_attempt=%s, weak=%s, reason=%s), escalating to %s",
+                                    base_model, len(base_stripped), looks_like_tool_attempt, is_weak_answer, reason, model)
+                        yield f"data: {json.dumps({'type': 'escalated', 'base_model': base_model, 'advanced_model': model})}\n\n"
+                except Exception as base_err:
+                    logger.warning("Base model %s failed: %s, escalating to %s", base_model, base_err, model)
+                    yield f"data: {json.dumps({'type': 'escalated', 'base_model': base_model, 'advanced_model': model})}\n\n"
+            elif force_advanced:
+                logger.info("Force advanced mode: skipping base model, using %s directly", model)
+            elif _likely_needs_tools(user_message):
+                logger.info("Query likely needs tools: skipping base model, using %s directly", model)
+
+            # If base model succeeded, save and return early (skip advanced model flow)
+            if base_model_succeeded:
+                # Save session
+                session_data['messages'].append({
+                    'role': 'assistant',
+                    'content': full_response,
+                    'timestamp': datetime.now().isoformat(),
+                    'elapsed': round(time.time() - start_time, 2)
+                })
+                session_data['context_usage'] = prompt_tokens
+                save_session(current_chat_id, session_data)
+
+                # Detect code blocks
+                code_blocks = []
+                try:
+                    code_blocks = re.findall(r'```(\w+)?\n(.*?)```', full_response, re.DOTALL)
+                except Exception:
+                    pass
+                if code_blocks:
+                    for lang, code in code_blocks:
+                        if lang in ('html', 'htm', 'javascript', 'js', 'css', 'python', 'py', 'php', 'sh', 'bash'):
+                            yield f"data: {json.dumps({'type': 'code_save_offer', 'language': lang, 'code': code.strip()})}\n\n"
+                            break
+
+                elapsed = round(time.time() - start_time, 2)
+                yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model})}\n\n"
+                return
+
+            # --- Advanced model flow (with tools) ---
             payload = {
                 'model': model,
                 'messages': api_messages,
@@ -850,7 +1139,7 @@ def api_chat_stream():
             )
 
             logger.info("Sending request to Ollama model=%s at %s", model, datetime.now().isoformat())
-            with urllib.request.urlopen(req, timeout=600) as response:
+            with urllib.request.urlopen(req, timeout=300) as response:
                 tool_calls_buffer = []
                 current_tool_call = None
 
@@ -1179,7 +1468,7 @@ def api_chat_stream():
                             data=data_bytes,
                             headers={'Content-Type': 'application/json'}
                         )
-                        with urllib.request.urlopen(req2, timeout=600) as response2:
+                        with urllib.request.urlopen(req2, timeout=300) as response2:
                             for line in response2:
                                 line = line.decode('utf-8').strip()
                                 if not line:
@@ -1214,8 +1503,7 @@ def api_chat_stream():
         session_data['messages'].append({
             'role': 'assistant',
             'content': full_response,
-            'timestamp': datetime.now().isoformat(),
-            'elapsed': round(time.time() - start_time, 2)
+            'timestamp': datetime.now().isoformat()
         })
         # Save context usage in session for per-conversation display
         session_data['context_usage'] = prompt_tokens
@@ -1238,7 +1526,7 @@ def api_chat_stream():
 
         # Send completion event
         elapsed = round(time.time() - start_time, 2)
-        yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model})}\n\n"
 
     return Response(generate(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
@@ -1332,7 +1620,6 @@ def api_chat():
         'timestamp': datetime.now().isoformat()
     })
 
-    start_time = time.time()
     logger.info("Chat request: model=%s, msg_len=%d, session=%s", model, len(user_message), current_chat_id)
 
     # Use Ollama tools (no regex-based command detection)
@@ -1352,8 +1639,7 @@ def api_chat():
     session_data['messages'].append({
         'role': 'assistant',
         'content': response_text,
-        'timestamp': datetime.now().isoformat(),
-        'elapsed': round(time.time() - start_time, 2)
+        'timestamp': datetime.now().isoformat()
     })
     session_data['context_usage'] = prompt_tokens
     save_session(current_chat_id, session_data)

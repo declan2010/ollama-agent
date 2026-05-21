@@ -9,6 +9,8 @@ A web-based AI agent for Ollama with web search, local command execution, and fi
 ## Features
 
 - **Web Interface**: Modern chat UI with real-time streaming responses
+- **Dual-Model Routing**: Base chat model for fast simple conversations, advanced model for complex tasks with tools
+- **Auto-Escalation**: Automatically re-sends to the advanced model when a weak answer is detected
 - **Web Search**: Search the internet via DuckDuckGo
 - **Local Commands**: Execute read and write commands on the host system
 - **File Management**: Create, edit, and write files directly from the agent
@@ -18,11 +20,55 @@ A web-based AI agent for Ollama with web search, local command execution, and fi
 - **Markdown Rendering**: Full markdown support with syntax highlighting
 - **Dark/Light Theme**: Toggle between themes
 
+## Dual-Model Routing System
+
+Ollama-Agent uses a dual-model architecture to balance speed and capability:
+
+- **Base Chat Model** (default: `gemma4:e4b`) — Handles simple conversations **without** tools. Fast and lightweight.
+- **Advanced Model** (configurable via UI) — Handles complex tasks **with** tools (web search, local commands, file management).
+
+### How It Works
+
+1. When you send a message, it first goes to the **base model** for a fast response (no tools).
+2. If the base model gives a weak answer, the system **automatically escalates** to the advanced model.
+3. You can bypass the base model entirely with the **Force Advanced** checkbox.
+4. The active model dropdown is highlighted with a **green glow** in the UI so you always know which model responded.
+
+### Auto-Escalation Triggers
+
+The system automatically re-sends to the advanced model when:
+
+| Trigger | Examples |
+|---------|----------|
+| **Weak answer detected** | "I don't know", "no sé", "no tengo información", "as an AI", "I cannot" (EN + ES) |
+| **Response too short** | Fewer than 10 characters |
+| **Tool attempt** | Base model tries to use tools it doesn't have |
+
+### Keywords That Route to Advanced Model
+
+Messages containing these keywords are sent directly to the advanced model:
+
+| Category | English Keywords | Spanish Keywords |
+|----------|-----------------|------------------|
+| **Analysis** | analyze, review, compare, evaluate, summarize, explain, investigate, assess, interpret | analizar, revisar, comparar, evaluar, resumir, explicar, investigar, valorar |
+| **Files/System** | file, directory, execute, command, database, SQL, script, bash, terminal, shell | archivo, directorio, ejecutar, comando, base de datos, script |
+| **Search/Info** | search, find, news, weather, price, translate, lookup, who, where, when | buscar, encontrar, noticias, clima, precio, traducir |
+| **Data/Math** | chart, graph, statistics, calculate, formula, data, metrics, conversion | gráfico, calcular, estadísticas, fórmula, datos, métricas |
+| **Creation** | generate, create, design, write, build, develop, compose, draft, produce | generar, crear, diseñar, escribir, construir, desarrollar |
+
+### UI Controls
+
+- **Chat dropdown** — Select the base chat model
+- **Advanced dropdown** — Select the advanced model (with tools)
+- **Backup dropdown** — Select a fallback model
+- **Force Advanced checkbox** — Always use the advanced model, skipping the base model
+- Model preferences are saved in **localStorage** and persist across sessions
+
 ## Requirements
 
 - Python 3.8+
 - [Ollama](https://ollama.com/) running locally (default: `http://localhost:11434`)
-- Ollama models installed (e.g., `ollama pull llama3`)
+- Ollama models installed (e.g., `ollama pull llama3`, `ollama pull gemma4:e4b`)
 
 ## Installation
 
@@ -50,9 +96,19 @@ Open your browser at: **http://localhost:5000**
 | `SESSION_DIR` | `./sessions` | Directory for chat sessions |
 | `PORT` | `5000` | Server port |
 
+### Default Model
+
+The default base chat model is configured in `ollama_chat.py`:
+
+```python
+BASE_CHAT_MODEL = "gemma4:e4b"
+```
+
+Change this value to set a different default base model.
+
 ## Available Tools
 
-The agent can use these tools when available:
+The advanced model can use these tools when available:
 
 | Tool | Description |
 |------|-------------|
@@ -64,11 +120,12 @@ The agent can use these tools when available:
 
 ```
 ollama-agent/
-├── ollama_chat.py   # Flask backend with Ollama integration
+├── ollama_chat.py         # Flask backend with Ollama integration & dual-model routing
 ├── templates/
-│   └── index.html   # Frontend chat interface
-├── README.md         # This file
-└── LICENSE           # MIT License
+│   └── index.html         # Frontend chat interface with model dropdowns
+├── sessions/              # Local chat history (git-ignored)
+├── README.md              # This file
+└── LICENSE                # MIT License
 ```
 
 ## Security Notes
