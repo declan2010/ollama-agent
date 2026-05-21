@@ -258,6 +258,32 @@
             background: rgba(76, 175, 80, 0.1);
         }
 
+        /* Advanced model active: blue glow */
+        .model-selector.active-advanced select {
+            border: 2px solid #3B82F6;
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+        }
+        .model-selector.active-advanced label {
+            color: #3B82F6;
+            font-weight: bold;
+        }
+        .model-selector.active-advanced select {
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        /* Backup model active: orange glow */
+        .model-selector.active-backup select {
+            border: 2px solid #F59E0B;
+            box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
+        }
+        .model-selector.active-backup label {
+            color: #F59E0B;
+            font-weight: bold;
+        }
+        .model-selector.active-backup select {
+            background: rgba(245, 158, 11, 0.1);
+        }
+
         .used-model-badge {
             display: inline-block;
             font-size: 0.7rem;
@@ -1562,6 +1588,11 @@
             isWaiting = true;
             sendBtn.disabled = true;
 
+            // Clear previous model glow indicators
+            document.querySelectorAll('.model-selector').forEach(el => {
+                el.classList.remove('active-model', 'active-advanced', 'active-backup');
+            });
+
             // Show stop button, hide send button
             sendBtn.style.display = 'none';
             stopBtn.style.display = '';
@@ -1642,7 +1673,20 @@
                         try {
                             const data = JSON.parse(trimmed.slice(6));
 
-                            if (data.type === 'token') {
+                            if (data.type === 'model_routing') {
+                                // Early notification: which model route is being used
+                                // Highlight the correct dropdown BEFORE tokens arrive
+                                document.querySelectorAll('.model-selector').forEach(el => {
+                                    el.classList.remove('active-model', 'active-advanced', 'active-backup');
+                                });
+                                if (data.route === 'base_first') {
+                                    // Starting with base model — green glow on Chat dropdown
+                                    baseModelSelect.closest('.model-selector').classList.add('active-model');
+                                } else if (data.route === 'advanced_direct') {
+                                    // Going straight to advanced — blue glow on Advanced dropdown
+                                    modelSelect.closest('.model-selector').classList.add('active-advanced');
+                                }
+                            } else if (data.type === 'token') {
                                 fullResponse += data.content;
                                 if (contentEl) {
                                     contentEl.innerHTML = renderMarkdown(fullResponse);
@@ -1685,7 +1729,13 @@
                                     addCopyButtons(contentEl);
                                 }
                             } else if (data.type === 'escalated') {
-                                // Query was escalated to the advanced model
+                                // Query was escalated from base to advanced model
+                                // Switch the glow from green (Chat) to blue (Advanced)
+                                document.querySelectorAll('.model-selector').forEach(el => {
+                                    el.classList.remove('active-model', 'active-advanced', 'active-backup');
+                                });
+                                modelSelect.closest('.model-selector').classList.add('active-advanced');
+                                // Show escalation notification in chat
                                 const streamEl = document.querySelector('#streaming-message .message-content');
                                 const lastMsg = chatArea.querySelector('.message:last-child .message-content');
                                 const target = streamEl || lastMsg;
@@ -1725,17 +1775,19 @@
                                         badge.textContent = '🤖 ' + data.used_model;
                                         target.appendChild(badge);
                                     }
-                                    // Highlight the active model selector
-                                    document.querySelectorAll('.model-selector').forEach(el => el.classList.remove('active-model'));
+                                    // Highlight the active model selector with color-coded glow
+                                    document.querySelectorAll('.model-selector').forEach(el => {
+                                        el.classList.remove('active-model', 'active-advanced', 'active-backup');
+                                    });
                                     const baseVal = baseModelSelect.value;
                                     const advVal = modelSelect.value;
                                     const backVal = fallbackModelSelect ? fallbackModelSelect.value : '';
                                     if (data.used_model === baseVal) {
                                         baseModelSelect.closest('.model-selector').classList.add('active-model');
                                     } else if (data.used_model === advVal) {
-                                        modelSelect.closest('.model-selector').classList.add('active-model');
+                                        modelSelect.closest('.model-selector').classList.add('active-advanced');
                                     } else if (data.used_model === backVal) {
-                                        fallbackModelSelect.closest('.model-selector').classList.add('active-model');
+                                        fallbackModelSelect.closest('.model-selector').classList.add('active-backup');
                                     }
                                 }
                                 // Update model status after response (model is now loaded)

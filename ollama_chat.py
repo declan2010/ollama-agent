@@ -951,6 +951,12 @@ def api_chat_stream():
         start_time = time.time()
         used_model = model  # Track which model actually responds
         try:
+            # Notify frontend which model route we're taking (before any tokens)
+            if not force_advanced and not _likely_needs_tools(user_message):
+                yield f"data: {json.dumps({'type': 'model_routing', 'route': 'base_first', 'base_model': base_model, 'advanced_model': model})}\n\n"
+            else:
+                route_reason = 'forced' if force_advanced else 'needs_tools'
+                yield f"data: {json.dumps({'type': 'model_routing', 'route': 'advanced_direct', 'model': model, 'reason': route_reason})}\n\n"
             # Prepare messages for Ollama (strip timestamps for API)
             api_messages = []
             # Model-specific system prompts based on known behavior
@@ -967,7 +973,7 @@ def api_chat_stream():
                 if key in model.lower():
                     model_hint = hint
                     break
-            system_content = 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model
+            system_content = 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model + '\n- IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'
             if model_hint:
                 system_content += '\n\n' + model_hint
             api_messages.append({
@@ -994,7 +1000,7 @@ def api_chat_stream():
                 try:
                     import urllib.request as _urllib_base
                     # Build simpler messages for base model (no tools, simpler system prompt)
-                    base_api_messages = [{'role': 'system', 'content': 'You are a helpful assistant.'}]
+                    base_api_messages = [{'role': 'system', 'content': 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'}]
                     for msg in session_data['messages']:
                         base_api_messages.append({
                             'role': msg['role'],
