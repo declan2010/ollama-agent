@@ -443,6 +443,20 @@
             border-color: #4ade80;
         }
 
+        .model-info-badge.unloaded {
+            display: inline-block;
+            background: rgba(251, 146, 60, 0.15);
+            color: #fb923c;
+            border-color: #fb923c;
+        }
+
+        .model-info-badge.cloud {
+            display: inline-block;
+            background: rgba(96, 165, 250, 0.15);
+            color: #60a5fa;
+            border-color: #60a5fa;
+        }
+
         .settings-btn {
             background: transparent;
             border: none;
@@ -964,6 +978,7 @@
                         <option value="{{ model }}" {% if model == base_chat_model %}selected{% endif %}>{{ model }}</option>
                         {% endfor %}
                     </select>
+                    <span class="model-info-badge" id="baseModelBadge">●</span>
                 </div>
                 <div class="model-selector">
                     <label>Advanced:</label>
@@ -972,6 +987,7 @@
                         <option value="{{ model }}" {% if model == current_model %}selected{% endif %}>{{ model }}</option>
                         {% endfor %}
                     </select>
+                    <span class="model-info-badge" id="advModelBadge">●</span>
                 </div>
                 <div class="model-selector">
                     <label>Backup:</label>
@@ -981,6 +997,7 @@
                         <option value="{{ model }}">{{ model }}</option>
                         {% endfor %}
                     </select>
+                    <span class="model-info-badge" id="backModelBadge">●</span>
                 </div>
                 <div class="model-selector force-agent-selector">
                     <label for="forceAgentCheckbox" style="cursor:pointer;">Force&nbsp;Advanced</label>
@@ -993,7 +1010,7 @@
                     <span class="token-tracker-detail" id="tokenTrackerDetail" style="display:none;">0 tok</span>
                     <span class="token-tracker-session" id="tokenTrackerSession" style="display:none;"></span>
                 </div>
-                <span class="model-info-badge" id="modelInfoBadge">●</span>
+                
             </div>
             <button class="settings-btn" onclick="showDisclaimerModal()" title="Disclaimer" style="font-size: 1.2rem;">⚠️</button>
             <button class="donate-btn" onclick="showDonateModal()" title="Donate">💜</button>
@@ -1206,6 +1223,7 @@
 
         baseModelSelect.addEventListener('change', function() {
             localStorage.setItem('ollama-agent-base-model', this.value);
+            checkModelStatus();
         });
 
         forceAgentCheckbox.addEventListener('change', function() {
@@ -1315,33 +1333,85 @@
         }
 
         // Check model loaded status
-        async function checkModelStatus() {
-            const badge = document.getElementById('modelInfoBadge');
-            try {
-                const response = await fetch(`/api/model-info?model=${encodeURIComponent(modelSelect.value)}`);
-                const info = await response.json();
-                if (info.loaded === true) {
-                    badge.className = 'model-info-badge loaded';
-                    badge.textContent = '● Loaded';
-                } else if (info.loaded === false) {
-                    badge.className = 'model-info-badge';
-                    badge.textContent = '○ Unloaded';
-                    badge.style.display = 'inline-block';
-                } else {
-                    badge.style.display = 'none';
+        function formatModelSize(info) {
+            // 1) Prefer parameter_size from Ollama (e.g. "8.0B", "4.1B") — compact and user-friendly
+            const paramSize = info.parameter_size || info.details?.parameter_size || '';
+            if (paramSize) {
+                // Parse e.g. "8.0B" → just return as-is (already condensed)
+                // Parse e.g. "7,241,728" → condense
+                const cleaned = paramSize.replace(/,/g, '');
+                if (/^\d+$/.test(cleaned)) {
+                    const n = parseInt(cleaned);
+                    if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+                    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+                    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+                    return paramSize;
                 }
+                return paramSize; // Already "8.0B" format
+            }
+            // 2) Fallback: size in bytes (from /api/ps when loaded) — show as GB/MB
+            const sizeBytes = info.size || 0;
+            if (sizeBytes > 0) {
+                const sizeGB = sizeBytes / (1024 * 1024 * 1024);
+                if (sizeGB >= 1) return sizeGB.toFixed(1) + 'GB';
+                const sizeMB = Math.round(sizeBytes / (1024 * 1024));
+                return sizeMB + 'MB';
+            }
+            return '';
+        }
 
-                // Show model size if available
-                const sizeBytes = info.size || 0;
-                const paramSize = info.details?.parameter_size || info.parameter_size || '';
-                if (sizeBytes > 0) {
-                    const sizeMB = Math.round(sizeBytes / (1024 * 1024));
-                    badge.textContent += ` ${sizeMB > 1024 ? (sizeMB / 1024).toFixed(1) + 'GB' : sizeMB + 'MB'}`;
-                } else if (paramSize) {
-                    badge.textContent += ` ${paramSize}`;
-                }
-            } catch (e) {
-                badge.style.display = 'none';
+        function updateModelBadge(badgeId, model, isLocal) {
+            // isLocal: true = local model (show loaded status), false = cloud model (always available)
+            const badge = document.getElementById(badgeId);
+            if (!badge || !model) {
+                if (badge) badge.style.display = 'none';
+                return;
+            }
+
+            // Cloud models are always available
+            if (isLocal === false || model.includes(':cloud')) {
+                badge.className = 'model-info-badge loaded';
+                badge.textContent = '☁ Ready';
+                badge.style.display = 'inline-block';
+                return;
+            }
+
+            fetch(`/api/model-info?model=${encodeURIComponent(model)}`)
+                .then(r => r.json())
+                .then(info => {
+                    if (info.loaded === true) {
+                        badge.className = 'model-info-badge loaded';
+                        const sz = formatModelSize(info);
+                        badge.textContent = sz ? `● ${sz}` : '● Loaded';
+                    } else if (info.loaded === false) {
+                        badge.className = 'model-info-badge unloaded';
+                        badge.textContent = '○ Unloaded';
+                    } else {
+                        // Unknown status — still show size if available
+                        badge.className = 'model-info-badge';
+                        const sz = formatModelSize(info);
+                        badge.textContent = sz ? `◆ ${sz}` : '●';
+                    }
+                    badge.style.display = 'inline-block';
+                })
+                .catch(() => {
+                    badge.style.display = 'none';
+                });
+        }
+
+        async function checkModelStatus() {
+            // Chat (base) model — local
+            updateModelBadge('baseModelBadge', baseModelSelect.value, true);
+            // Advanced model — could be local or cloud
+            const advIsCloud = modelSelect.value.includes(':cloud');
+            updateModelBadge('advModelBadge', modelSelect.value, advIsCloud);
+            // Backup model — could be local or cloud, or empty
+            if (fallbackModelSelect.value) {
+                const backIsCloud = fallbackModelSelect.value.includes(':cloud');
+                updateModelBadge('backModelBadge', fallbackModelSelect.value, backIsCloud);
+            } else {
+                const badge = document.getElementById('backModelBadge');
+                if (badge) badge.style.display = 'none';
             }
         }
 

@@ -401,13 +401,23 @@ def get_model_info(model_name):
                         num_ctx = model_info[key]
                         break
 
+            details = data.get('details', {})
+            # Extract parameter_size (e.g. "8.0B", "4.1B") from details or model_info
+            parameter_size = details.get('parameter_size', '')
+            if not parameter_size:
+                for key in model_info:
+                    if 'parameter_size' in key.lower() or 'param_count' in key.lower():
+                        parameter_size = str(model_info[key])
+                        break
+
             return {
                 'model': model_name,
                 'context_length': num_ctx or 4096,
                 'num_ctx': num_ctx or 4096,
                 'model_info': model_info,
-                'details': data.get('details', {}),
+                'details': details,
                 'size': data.get('size', 0),
+                'parameter_size': parameter_size,
                 'modified_at': data.get('modified_at', ''),
             }
     except Exception as e:
@@ -743,6 +753,14 @@ def api_model_info():
             if not is_loaded and ':cloud' in model_name:
                 is_loaded = True
             info['loaded'] = is_loaded
+            # Get size from /api/ps if model is loaded (more accurate than /api/show)
+            if is_loaded:
+                for m in ps_data.get('models', []):
+                    if model_name == m.get('name', '') or model_name + ':latest' == m.get('name', ''):
+                        ps_size = m.get('size', 0)
+                        if ps_size > 0 and (info.get('size', 0) == 0 or ps_size != info.get('size', 0)):
+                            info['size'] = ps_size
+                        break
     except Exception:
         info['loaded'] = None  # Unknown
 
