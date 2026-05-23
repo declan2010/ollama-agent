@@ -948,6 +948,8 @@ def api_chat_stream():
     def generate():
         full_response = ""
         prompt_tokens = 0
+        eval_count = 0
+        base_eval_count = 0
         start_time = time.time()
         used_model = model  # Track which model actually responds
         try:
@@ -1032,6 +1034,7 @@ def api_chat_stream():
                                 continue
                             if base_chunk.get('done'):
                                 base_prompt_tokens = base_chunk.get('prompt_eval_count', 0)
+                                base_eval_count = base_chunk.get('eval_count', 0)
                                 break
                             base_content = base_chunk.get('message', {}).get('content', '')
                             if base_content:
@@ -1123,7 +1126,8 @@ def api_chat_stream():
                             break
 
                 elapsed = round(time.time() - start_time, 2)
-                yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model})}\n\n"
+                is_local = (used_model == base_model)
+                yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'eval_count': base_eval_count, 'elapsed': elapsed, 'used_model': used_model, 'is_local': is_local})}\n\n"
                 return
 
             # --- Advanced model flow (with tools) ---
@@ -1467,6 +1471,7 @@ def api_chat_stream():
                 if not full_response and not tool_calls_buffer:
                     if fallback_model and fallback_model != model:
                         logger.info("Primary model '%s' empty response, trying fallback '%s'", model, fallback_model)
+                        yield f"data: {json.dumps({'type': 'model_routing', 'route': 'fallback', 'model': fallback_model, 'reason': 'empty_response'})}\n\n"
                         payload['model'] = fallback_model
                         data_bytes = json.dumps(payload).encode('utf-8')
                         req2 = urllib.request.Request(
@@ -1485,6 +1490,8 @@ def api_chat_stream():
                                     continue
                                 if chunk.get('done'):
                                     prompt_tokens = chunk.get('prompt_eval_count', 0)
+                                    eval_count = chunk.get('eval_count', 0)
+                                    used_model = fallback_model
                                     break
                                 content = chunk.get('message', {}).get('content', '')
                                 if content:
@@ -1532,7 +1539,8 @@ def api_chat_stream():
 
         # Send completion event
         elapsed = round(time.time() - start_time, 2)
-        yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model})}\n\n"
+        is_local = (used_model == base_model)
+        yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'eval_count': eval_count, 'elapsed': elapsed, 'used_model': used_model, 'is_local': is_local})}\n\n"
 
     return Response(generate(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
@@ -1592,6 +1600,7 @@ def api_chat():
     user_message = data.get('message', '').strip()
     model = data.get('model', session.get('model', 'llama3'))
     fallback_model = data.get('fallback_model', '')
+    base_model = data.get('base_model', '') or BASE_CHAT_MODEL
 
     if not user_message:
         return jsonify({'error': 'Empty message'})
@@ -1650,10 +1659,27 @@ def api_chat():
     session_data['context_usage'] = prompt_tokens
     save_session(current_chat_id, session_data)
 
+    # Determine which model actually responded
+    used_model = model
+    is_local = (model == base_model)  # True if base (local/free) model was used
+    eval_count_val = 0
+
+    # Check if fallback was used (response starts with [Fallback:])
+    if fallback_model and response_text.startswith('[Fallback:'):
+        used_model = fallback_model
+        is_local = (fallback_model == base_model)
+    elif isinstance(result, dict):
+        used_model = result.get('used_model', model)
+        eval_count_val = result.get('eval_count', 0)
+        is_local = (used_model == base_model)
+
     return jsonify({
         'response': response_text,
         'session_id': current_chat_id,
-        'context_usage': prompt_tokens
+        'context_usage': prompt_tokens,
+        'eval_count': eval_count_val,
+        'used_model': used_model,
+        'is_local': is_local
     })
 
 

@@ -358,6 +358,74 @@
             border-color: #ef4444;
         }
 
+        /* Token tracker — shows usage/cost for advanced (paid) models, "Gratis" for local */
+        .token-tracker {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            background: var(--bg-tertiary);
+            padding: 5px 12px;
+            border-radius: 15px;
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.3s ease;
+        }
+        .token-tracker.local {
+            background: rgba(34,197,94,0.1);
+            border-color: rgba(34,197,94,0.3);
+            color: #4ade80;
+        }
+        .token-tracker.advanced {
+            background: rgba(59,130,246,0.1);
+            border-color: rgba(59,130,246,0.3);
+            color: #60a5fa;
+        }
+        .token-tracker.fallback {
+            background: rgba(249,115,22,0.1);
+            border-color: rgba(249,115,22,0.3);
+            color: #fb923c;
+        }
+        .token-tracker-icon {
+            font-size: 0.85rem;
+        }
+        .token-tracker-label {
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .token-tracker-bar-bg {
+            width: 60px;
+            height: 8px;
+            background: var(--bg-primary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .token-tracker-bar-fill {
+            height: 100%;
+            background: #60a5fa;
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+        .token-tracker.local .token-tracker-bar-fill {
+            background: #4ade80;
+        }
+        .token-tracker.advanced .token-tracker-bar-fill {
+            background: #60a5fa;
+        }
+        .token-tracker.fallback .token-tracker-bar-fill {
+            background: #fb923c;
+        }
+        .token-tracker-detail {
+            font-size: 0.72rem;
+            opacity: 0.8;
+            white-space: nowrap;
+        }
+        .token-tracker-session {
+            font-size: 0.68rem;
+            opacity: 0.6;
+            white-space: nowrap;
+        }
+
         .model-info-badge {
             font-size: 0.75rem;
             color: var(--text-secondary);
@@ -918,9 +986,12 @@
                     <label for="forceAgentCheckbox" style="cursor:pointer;">Force&nbsp;Advanced</label>
                     <input type="checkbox" id="forceAgentCheckbox">
                 </div>
-                <div class="context-indicator" id="contextIndicator">
-                    <div class="context-bar-bg"><div class="context-bar-fill" id="contextBar" style="width: 0%"></div></div>
-                    <span id="contextText">0%</span>
+                <div class="token-tracker" id="tokenTracker">
+                    <span class="token-tracker-icon" id="tokenTrackerIcon">♾️</span>
+                    <span class="token-tracker-label" id="tokenTrackerLabel">Gratis</span>
+                    <div class="token-tracker-bar-bg" id="tokenBarBg" style="display:none;"><div class="token-tracker-bar-fill" id="tokenBar" style="width: 0%"></div></div>
+                    <span class="token-tracker-detail" id="tokenTrackerDetail" style="display:none;">0 tok</span>
+                    <span class="token-tracker-session" id="tokenTrackerSession" style="display:none;"></span>
                 </div>
                 <span class="model-info-badge" id="modelInfoBadge">●</span>
             </div>
@@ -1142,36 +1213,105 @@
         });
 
         // Update context indicator with visual bar
-        async function updateContextIndicator(currentTokens) {
-            const contextIndicator = document.getElementById('contextIndicator');
-            const contextText = document.getElementById('contextText');
-            const contextBar = document.getElementById('contextBar');
+        // Token tracker: shows usage for advanced (paid) models, "Gratis" for local models
+        let sessionAdvancedTokens = parseInt(localStorage.getItem('ollama-agent-session-tokens') || '0');
 
-            try {
-                const response = await fetch(`/api/model-info?model=${encodeURIComponent(modelSelect.value)}`);
-                const info = await response.json();
+        function updateTokenTracker(opts) {
+            // opts: { type: 'local'|'advanced'|'fallback', used_model: str, prompt_tokens: int, eval_count: int, reset: bool }
+            const tracker = document.getElementById('tokenTracker');
+            const icon = document.getElementById('tokenTrackerIcon');
+            const label = document.getElementById('tokenTrackerLabel');
+            const barBg = document.getElementById('tokenBarBg');
+            const bar = document.getElementById('tokenBar');
+            const detail = document.getElementById('tokenTrackerDetail');
+            const session = document.getElementById('tokenTrackerSession');
 
-                if (info.error) {
-                    contextText.textContent = `~${currentTokens} tokens`;
-                    contextBar.style.width = '0%';
-                    return;
-                }
+            if (!tracker) return;
 
-                maxContextTokens = info.num_ctx || info.context_length || 4096;
-                const percentage = Math.round((currentTokens / maxContextTokens) * 100);
-                contextText.textContent = `${percentage}%`;
-                contextBar.style.width = `${Math.min(percentage, 100)}%`;
-
-                contextIndicator.classList.remove('warning', 'danger');
-                if (percentage >= 90) {
-                    contextIndicator.classList.add('danger');
-                } else if (percentage >= 70) {
-                    contextIndicator.classList.add('warning');
-                }
-            } catch (e) {
-                contextText.textContent = `~${currentTokens} tokens`;
-                contextBar.style.width = '0%';
+            // Reset mode
+            if (opts && opts.reset) {
+                tracker.className = 'token-tracker';
+                icon.textContent = '♾️';
+                label.textContent = 'Gratis';
+                barBg.style.display = 'none';
+                detail.style.display = 'none';
+                session.style.display = 'none';
+                bar.style.width = '0%';
+                return;
             }
+
+            if (!opts) return;
+
+            const isLocal = opts.type === 'local';
+
+            // Update session accumulation for advanced tokens
+            if (!isLocal && opts.eval_count !== undefined) {
+                sessionAdvancedTokens += (opts.prompt_tokens || 0) + opts.eval_count;
+                localStorage.setItem('ollama-agent-session-tokens', sessionAdvancedTokens);
+            }
+
+            tracker.className = 'token-tracker ' + opts.type;
+
+            if (isLocal) {
+                // Local/free model — show "Gratis"
+                icon.textContent = '♾️';
+                label.textContent = 'Gratis';
+                barBg.style.display = 'none';
+                detail.style.display = 'none';
+                if (opts.prompt_tokens) {
+                    detail.style.display = 'inline';
+                    detail.textContent = opts.prompt_tokens + ' tok';
+                }
+            } else {
+                // Advanced (paid) model — show token consumption
+                const total = (opts.prompt_tokens || 0) + (opts.eval_count || 0);
+                icon.textContent = opts.type === 'fallback' ? '⚠️' : '🤖';
+                label.textContent = formatTokens(total);
+
+                // Show context bar (prompt_tokens vs context window)
+                barBg.style.display = 'block';
+                bar.style.width = '0%';
+
+                // Fetch context window size for percentage
+                fetch(`/api/model-info?model=${encodeURIComponent(opts.used_model || modelSelect.value)}`)
+                    .then(r => r.json())
+                    .then(info => {
+                        const maxCtx = info.num_ctx || info.context_length || 4096;
+                        const pct = Math.round(((opts.prompt_tokens || 0) / maxCtx) * 100);
+                        bar.style.width = Math.min(pct, 100) + '%';
+                        bar.className = 'token-tracker-bar-fill';
+                    })
+                    .catch(() => {});
+
+                // Show detail: input + output
+                detail.style.display = 'inline';
+                detail.textContent = `↓${opts.prompt_tokens || 0} ↑${opts.eval_count || 0}`;
+
+                // Show session total
+                session.style.display = 'inline';
+                session.textContent = `Σ ${formatTokens(sessionAdvancedTokens)}`;
+            }
+        }
+
+        // Legacy alias — routes to token tracker
+        async function updateContextIndicator(currentTokens) {
+            // If called with just a number (legacy), reset tracker or show local
+            if (currentTokens === 0) {
+                updateTokenTracker({ reset: true });
+                return;
+            }
+            updateTokenTracker({
+                type: 'local',
+                used_model: baseModelSelect.value,
+                prompt_tokens: currentTokens,
+                eval_count: 0
+            });
+        }
+
+        function formatTokens(n) {
+            if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+            if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+            return n + '';
         }
 
         // Check model loaded status
@@ -1207,7 +1347,7 @@
 
         modelSelect.addEventListener('change', function() {
             localStorage.setItem('ollama-agent-model', this.value);
-            updateContextIndicator(0);
+            updateTokenTracker({ reset: true });
             checkModelStatus();
             // Save model to current session
             if (currentSessionId) {
@@ -1409,7 +1549,9 @@
                         if (sessionId === currentSessionId) {
                             // Clear current session, show welcome
                             currentSessionId = null;
-                            updateContextIndicator(0);
+                            sessionAdvancedTokens = 0;
+                            localStorage.setItem('ollama-agent-session-tokens', '0');
+                            updateTokenTracker({ reset: true });
                             chatArea.innerHTML = `
                                 <div class="welcome-message">
                                     <h2>Conversation deleted</h2>
@@ -1470,7 +1612,9 @@
                 const data = await response.json();
 
                 currentSessionId = data.session_id;
-                updateContextIndicator(0);
+                sessionAdvancedTokens = 0;
+                localStorage.setItem('ollama-agent-session-tokens', '0');
+                updateTokenTracker({ reset: true });
 
                 // Save current model selection to the new session
                 if (modelSelect.value) {
@@ -1519,10 +1663,15 @@
 
                 // Restore context usage for this conversation
                 if (data.context_usage !== undefined) {
-                    updateContextIndicator(data.context_usage);
+                    updateTokenTracker({
+                        type: 'local',
+                        used_model: data.model || baseModelSelect.value,
+                        prompt_tokens: data.context_usage,
+                        eval_count: 0
+                    });
                 } else {
-                    // New conversation, reset context
-                    updateContextIndicator(0);
+                    // New conversation, reset token tracker
+                    updateTokenTracker({ reset: true });
                 }
 
                 if (data.model) modelSelect.value = data.model;
@@ -1682,9 +1831,20 @@
                                 if (data.route === 'base_first') {
                                     // Starting with base model — green glow on Chat dropdown
                                     baseModelSelect.closest('.model-selector').classList.add('active-model');
+                                    // Show "Local" state on token tracker while waiting
+                                    updateTokenTracker({ type: 'local', used_model: baseModelSelect.value, prompt_tokens: 0, eval_count: 0 });
                                 } else if (data.route === 'advanced_direct') {
                                     // Going straight to advanced — blue glow on Advanced dropdown
                                     modelSelect.closest('.model-selector').classList.add('active-advanced');
+                                    // Show "Advanced" state on token tracker while waiting
+                                    updateTokenTracker({ type: 'advanced', used_model: modelSelect.value, prompt_tokens: 0, eval_count: 0 });
+                                } else if (data.route === 'fallback') {
+                                    // Fallback model is responding — orange glow on Backup dropdown
+                                    if (fallbackModelSelect) {
+                                        fallbackModelSelect.closest('.model-selector').classList.add('active-backup');
+                                    }
+                                    // Show "Fallback" state on token tracker
+                                    updateTokenTracker({ type: 'fallback', used_model: data.model || (fallbackModelSelect ? fallbackModelSelect.value : ''), prompt_tokens: 0, eval_count: 0 });
                                 }
                             } else if (data.type === 'token') {
                                 fullResponse += data.content;
@@ -1735,6 +1895,8 @@
                                     el.classList.remove('active-model', 'active-advanced', 'active-backup');
                                 });
                                 modelSelect.closest('.model-selector').classList.add('active-advanced');
+                                // Switch token tracker from local to advanced
+                                updateTokenTracker({ type: 'advanced', used_model: data.advanced_model || modelSelect.value, prompt_tokens: 0, eval_count: 0 });
                                 // Show escalation notification in chat
                                 const streamEl = document.querySelector('#streaming-message .message-content');
                                 const lastMsg = chatArea.querySelector('.message:last-child .message-content');
@@ -1748,8 +1910,19 @@
                                     setTimeout(() => notif.remove(), 3500);
                                 }
                             } else if (data.type === 'done') {
+                                // Update token tracker with model type info
                                 if (data.context_usage !== undefined) {
-                                    updateContextIndicator(data.context_usage);
+                                    const isLocal = data.is_local !== false; // default true if missing
+                                    const trackerType = isLocal ? 'local' : 'advanced';
+                                    // Check if fallback model was used
+                                    const backVal = fallbackModelSelect ? fallbackModelSelect.value : '';
+                                    const finalType = (data.used_model && backVal && data.used_model === backVal) ? 'fallback' : trackerType;
+                                    updateTokenTracker({
+                                        type: finalType,
+                                        used_model: data.used_model || modelSelect.value,
+                                        prompt_tokens: data.context_usage,
+                                        eval_count: data.eval_count || 0
+                                    });
                                 }
                                 // Show elapsed time
                                 if (data.elapsed !== undefined) {
@@ -1862,7 +2035,15 @@
                 } else {
                     addMessageToUI('assistant', data.response);
                     if (data.context_usage !== undefined) {
-                        updateContextIndicator(data.context_usage);
+                        const isLocal = data.is_local !== false;
+                        const backVal = fallbackModelSelect ? fallbackModelSelect.value : '';
+                        const finalType = (data.used_model && backVal && data.used_model === backVal) ? 'fallback' : (isLocal ? 'local' : 'advanced');
+                        updateTokenTracker({
+                            type: finalType,
+                            used_model: data.used_model || modelSelect.value,
+                            prompt_tokens: data.context_usage,
+                            eval_count: data.eval_count || 0
+                        });
                     }
                     // Update model status after response (model is now loaded)
                     checkModelStatus();
