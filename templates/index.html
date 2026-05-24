@@ -53,7 +53,8 @@
         }
 
         .sidebar {
-            width: 280px;
+            width: 220px;
+            min-width: 180px;
             background: var(--bg-secondary);
             border-right: 1px solid var(--border);
             display: flex;
@@ -63,18 +64,18 @@
         }
 
         .sidebar-header {
-            padding: 20px;
+            padding: 15px;
             border-bottom: 1px solid var(--border);
         }
 
         .sidebar-header h1 {
-            font-size: 1.4rem;
+            font-size: 1.15rem;
             color: var(--accent);
-            margin-bottom: 5px;
+            margin-bottom: 3px;
         }
 
         .sidebar-header p {
-            font-size: 0.8rem;
+            font-size: 0.72rem;
             color: var(--text-secondary);
         }
 
@@ -192,30 +193,33 @@
         }
 
         .header {
-            padding: 15px 25px;
+            padding: 10px 15px;
             background: var(--bg-secondary);
             border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: 12px;
+            flex-wrap: wrap;
             transition: background 0.3s, border-color 0.3s;
         }
 
         .header-left {
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: 10px;
             flex: 1;
+            min-width: 0;
+            flex-wrap: wrap;
         }
 
         .model-selector {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 5px;
         }
 
         .model-selector label {
-            font-size: 0.9rem;
+            font-size: 0.78rem;
             color: var(--text-secondary);
         }
 
@@ -223,10 +227,11 @@
             background: var(--bg-tertiary);
             color: var(--text-primary);
             border: 1px solid var(--accent);
-            padding: 8px 15px;
-            border-radius: 6px;
-            font-size: 0.9rem;
+            padding: 4px 8px;
+            border-radius: 5px;
+            font-size: 0.82rem;
             cursor: pointer;
+            max-width: 140px;
         }
 
         .model-selector select option {
@@ -234,14 +239,18 @@
         }
 
         .model-selector.force-agent-selector {
-            gap: 6px;
+            gap: 4px;
         }
 
         .model-selector.force-agent-selector input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
+            width: 16px;
+            height: 16px;
             accent-color: var(--accent);
             cursor: pointer;
+        }
+
+        .model-selector.force-agent-selector label {
+            font-size: 0.75rem;
         }
 
         .model-selector.active-model select {
@@ -358,18 +367,19 @@
             border-color: #ef4444;
         }
 
-        /* Token tracker — shows usage/cost for advanced (paid) models, "Gratis" for local */
+        /* Token tracker — shows usage/cost for advanced (paid) models, "Free" for local */
         .token-tracker {
-            font-size: 0.8rem;
+            font-size: 0.72rem;
             color: var(--text-secondary);
             background: var(--bg-tertiary);
-            padding: 5px 12px;
-            border-radius: 15px;
+            padding: 3px 8px;
+            border-radius: 12px;
             border: 1px solid var(--border);
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
             transition: all 0.3s ease;
+            white-space: nowrap;
         }
         .token-tracker.local {
             background: rgba(34,197,94,0.1);
@@ -427,13 +437,14 @@
         }
 
         .model-info-badge {
-            font-size: 0.75rem;
+            font-size: 0.68rem;
             color: var(--text-secondary);
             background: var(--bg-tertiary);
-            padding: 3px 8px;
-            border-radius: 10px;
+            padding: 2px 5px;
+            border-radius: 8px;
             border: 1px solid var(--border);
             display: none;
+            white-space: nowrap;
         }
 
         .model-info-badge.loaded {
@@ -461,11 +472,12 @@
             background: transparent;
             border: none;
             color: var(--text-secondary);
-            font-size: 1.5rem;
+            font-size: 1.2rem;
             cursor: pointer;
-            padding: 8px;
+            padding: 6px;
             border-radius: 50%;
             transition: background 0.2s, color 0.2s;
+            flex-shrink: 0;
         }
 
         .settings-btn:hover {
@@ -477,14 +489,22 @@
             background: none;
             border: none;
             cursor: pointer;
-            padding: 8px;
+            padding: 6px;
             border-radius: 50%;
             transition: background 0.2s, color 0.2s;
-            font-size: 1.1rem;
+            font-size: 0.95rem;
+            flex-shrink: 0;
         }
 
         .donate-btn:hover {
             background: #0040dd30;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
         }
 
         .chat-area {
@@ -956,7 +976,7 @@
     <div class="sidebar">
         <div class="sidebar-header">
             <h1>🤖 Ollama-Agent</h1>
-            <span style="font-size: 0.7em; color: var(--text-secondary); margin-left: 8px;">by Declan2010</span>
+            <span style="font-size: 0.65em; color: var(--text-secondary); margin-left: 4px;">by Declan2010</span>
             <p>Python + HTML AI Agent</p>
         </div>
 
@@ -1005,16 +1025,18 @@
                 </div>
                 <div class="token-tracker" id="tokenTracker">
                     <span class="token-tracker-icon" id="tokenTrackerIcon">♾️</span>
-                    <span class="token-tracker-label" id="tokenTrackerLabel">Gratis</span>
+                    <span class="token-tracker-label" id="tokenTrackerLabel">Free</span>
                     <div class="token-tracker-bar-bg" id="tokenBarBg" style="display:none;"><div class="token-tracker-bar-fill" id="tokenBar" style="width: 0%"></div></div>
                     <span class="token-tracker-detail" id="tokenTrackerDetail" style="display:none;">0 tok</span>
                     <span class="token-tracker-session" id="tokenTrackerSession" style="display:none;"></span>
                 </div>
                 
             </div>
-            <button class="settings-btn" onclick="showDisclaimerModal()" title="Disclaimer" style="font-size: 1.2rem;">⚠️</button>
-            <button class="donate-btn" onclick="showDonateModal()" title="Donate">💜</button>
-            <button class="settings-btn" onclick="openSettings()" title="Settings">⚙️</button>
+            <div class="header-actions">
+                <button class="settings-btn" onclick="showDisclaimerModal()" title="Disclaimer" style="font-size: 1.2rem;">⚠️</button>
+                <button class="donate-btn" onclick="showDonateModal()" title="Donate">💜</button>
+                <button class="settings-btn" onclick="openSettings()" title="Settings">⚙️</button>
+            </div>
         </div>
 
         <div class="chat-area" id="chatArea">
@@ -1231,7 +1253,7 @@
         });
 
         // Update context indicator with visual bar
-        // Token tracker: shows usage for advanced (paid) models, "Gratis" for local models
+        // Token tracker: shows usage for advanced (paid) models, "Free" for local models
         let sessionAdvancedTokens = parseInt(localStorage.getItem('ollama-agent-session-tokens') || '0');
 
         function updateTokenTracker(opts) {
@@ -1250,7 +1272,7 @@
             if (opts && opts.reset) {
                 tracker.className = 'token-tracker';
                 icon.textContent = '♾️';
-                label.textContent = 'Gratis';
+                label.textContent = 'Free';
                 barBg.style.display = 'none';
                 detail.style.display = 'none';
                 session.style.display = 'none';
@@ -1271,9 +1293,9 @@
             tracker.className = 'token-tracker ' + opts.type;
 
             if (isLocal) {
-                // Local/free model — show "Gratis"
+                // Local/free model — show "Free"
                 icon.textContent = '♾️';
-                label.textContent = 'Gratis';
+                label.textContent = 'Free';
                 barBg.style.display = 'none';
                 detail.style.display = 'none';
                 if (opts.prompt_tokens) {
