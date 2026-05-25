@@ -924,6 +924,7 @@ def api_chat_stream():
     fallback_model = data.get('fallback_model', '')
     base_model = data.get('base_model', '')
     force_advanced = data.get('force_advanced', False)
+    force_basic = data.get('force_basic', False)
     if not base_model:
         base_model = BASE_CHAT_MODEL
 
@@ -972,7 +973,9 @@ def api_chat_stream():
         used_model = model  # Track which model actually responds
         try:
             # Notify frontend which model route we're taking (before any tokens)
-            if not force_advanced and not _likely_needs_tools(user_message):
+            if force_basic:
+                yield f"data: {json.dumps({'type': 'model_routing', 'route': 'base_first', 'base_model': base_model, 'advanced_model': model, 'forced': True})}\n\n"
+            elif not force_advanced and not _likely_needs_tools(user_message):
                 yield f"data: {json.dumps({'type': 'model_routing', 'route': 'base_first', 'base_model': base_model, 'advanced_model': model})}\n\n"
             else:
                 route_reason = 'forced' if force_advanced else 'needs_tools'
@@ -1016,7 +1019,7 @@ def api_chat_stream():
 
             # --- Base model routing: try simpler model first for simple conversations ---
             base_model_succeeded = False
-            if not force_advanced and not _likely_needs_tools(user_message):
+            if force_basic or (not force_advanced and not _likely_needs_tools(user_message)):
                 try:
                     import urllib.request as _urllib_base
                     # Build simpler messages for base model (no tools, simpler system prompt)
@@ -1098,13 +1101,13 @@ def api_chat_stream():
                     base_lower = base_stripped.lower()
                     is_weak_answer = any(p in base_lower for p in weak_answer_patterns)
 
-                    if base_stripped and len(base_stripped) >= 10 and not looks_like_tool_attempt and not is_weak_answer:
+                    if force_basic or (base_stripped and len(base_stripped) >= 10 and not looks_like_tool_attempt and not is_weak_answer):
                         # Base model succeeded - use its response
                         full_response = base_full_response
                         prompt_tokens = base_prompt_tokens
                         used_model = base_model
                         base_model_succeeded = True
-                        logger.info("Base model %s succeeded (response len=%d)", base_model, len(base_stripped))
+                        logger.info("Base model %s succeeded (response len=%d, force_basic=%s)", base_model, len(base_stripped), force_basic)
                     else:
                         # Escalate to advanced model
                         reason = 'weak_answer' if is_weak_answer else ('tool_attempt' if looks_like_tool_attempt else 'too_short')
@@ -1116,6 +1119,9 @@ def api_chat_stream():
                     yield f"data: {json.dumps({'type': 'escalated', 'base_model': base_model, 'advanced_model': model})}\n\n"
             elif force_advanced:
                 logger.info("Force advanced mode: skipping base model, using %s directly", model)
+            elif force_basic:
+                # This shouldn't be reached since force_basic enters the try block above, but just in case
+                pass
             elif _likely_needs_tools(user_message):
                 logger.info("Query likely needs tools: skipping base model, using %s directly", model)
 
@@ -1619,6 +1625,7 @@ def api_chat():
     model = data.get('model', session.get('model', 'llama3'))
     fallback_model = data.get('fallback_model', '')
     base_model = data.get('base_model', '') or BASE_CHAT_MODEL
+    force_basic = data.get('force_basic', False)
 
     if not user_message:
         return jsonify({'error': 'Empty message'})
@@ -1653,12 +1660,58 @@ def api_chat():
         'timestamp': datetime.now().isoformat()
     })
 
-    logger.info("Chat request: model=%s, msg_len=%d, session=%s", model, len(user_message), current_chat_id)
+    logger.info("Chat request: model=%s, msg_len=%d, session=%s, force_basic=%s", model, len(user_message), current_chat_id, force_basic)
 
-    # Use Ollama tools (no regex-based command detection)
-    result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
-    response_text = result.get('response', '') if isinstance(result, dict) else result
-    prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
+    # Initialize response variables
+    response_text = ''
+    prompt_tokens = 0
+    used_model = model
+    is_local = False
+    eval_count_val = 0
+
+    # If force_basic, use base model directly without tools (no escalation)
+    if force_basic:
+        base_api_messages = [{'role': 'system', 'content': 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'}]
+        for msg in session_data['messages']:
+            base_api_messages.append({
+                'role': msg['role'],
+                'content': msg['content']
+            })
+        base_payload = {
+            'model': base_model,
+            'messages': base_api_messages,
+            'stream': False,
+            'keep_alive': KEEP_ALIVE,
+        }
+        import urllib.request as _urllib_ns
+        base_data_bytes = json.dumps(base_payload).encode('utf-8')
+        base_req = _urllib_ns.Request(
+            f'{OLLAMA_BASE_URL}/api/chat',
+            data=base_data_bytes,
+            headers={'Content-Type': 'application/json'}
+        )
+        logger.info("Force basic mode: using %s directly", base_model)
+        try:
+            with _urllib_ns.urlopen(base_req, timeout=300) as base_resp:
+                base_result = json.loads(base_resp.read().decode('utf-8'))
+            response_text = base_result.get('message', {}).get('content', '')
+            prompt_tokens = base_result.get('prompt_eval_count', 0)
+            eval_count_val = base_result.get('eval_count', 0)
+            used_model = base_model
+            is_local = True
+        except Exception as e:
+            logger.warning("Force basic model %s failed: %s, falling back to normal flow", base_model, e)
+            result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
+            response_text = result.get('response', '') if isinstance(result, dict) else result
+            prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
+            eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
+            used_model = result.get('used_model', model) if isinstance(result, dict) else model
+            is_local = (used_model == base_model)
+    else:
+        # Use Ollama tools (no regex-based command detection)
+        result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
+        response_text = result.get('response', '') if isinstance(result, dict) else result
+        prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
 
     # Fallback model
     if (response_text.startswith('Error:') or response_text.startswith('[ERROR]')) and fallback_model and fallback_model != model:
@@ -1677,19 +1730,20 @@ def api_chat():
     session_data['context_usage'] = prompt_tokens
     save_session(current_chat_id, session_data)
 
-    # Determine which model actually responded
-    used_model = model
-    is_local = (model == base_model)  # True if base (local/free) model was used
-    eval_count_val = 0
+    # Determine which model actually responded (only for non-force_basic flow)
+    if not force_basic:
+        used_model = model
+        is_local = (model == base_model)  # True if base (local/free) model was used
+        eval_count_val = 0
 
-    # Check if fallback was used (response starts with [Fallback:])
-    if fallback_model and response_text.startswith('[Fallback:'):
-        used_model = fallback_model
-        is_local = (fallback_model == base_model)
-    elif isinstance(result, dict):
-        used_model = result.get('used_model', model)
-        eval_count_val = result.get('eval_count', 0)
-        is_local = (used_model == base_model)
+        # Check if fallback was used (response starts with [Fallback:])
+        if fallback_model and response_text.startswith('[Fallback:'):
+            used_model = fallback_model
+            is_local = (fallback_model == base_model)
+        elif isinstance(result, dict):
+            used_model = result.get('used_model', model)
+            eval_count_val = result.get('eval_count', 0)
+            is_local = (used_model == base_model)
 
     return jsonify({
         'response': response_text,

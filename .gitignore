@@ -2,3 +2,6 @@ sessions/
 __pycache__/
 *.bak
 plans/
+.venv/
+test_ddgs.py
+check_syntax.py

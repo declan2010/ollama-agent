@@ -992,7 +992,7 @@
         <div class="header">
             <div class="header-left">
                 <div class="model-selector">
-                    <label>Chat:</label>
+                    <label>Basic:</label>
                     <select id="baseModelSelect">
                         {% for model in models %}
                         <option value="{{ model }}" {% if model == base_chat_model %}selected{% endif %}>{{ model }}</option>
@@ -1018,6 +1018,10 @@
                         {% endfor %}
                     </select>
                     <span class="model-info-badge" id="backModelBadge">●</span>
+                </div>
+                <div class="model-selector force-agent-selector">
+                    <label for="forceBasicCheckbox" style="cursor:pointer;">Force&nbsp;Basic</label>
+                    <input type="checkbox" id="forceBasicCheckbox">
                 </div>
                 <div class="model-selector force-agent-selector">
                     <label for="forceAgentCheckbox" style="cursor:pointer;">Force&nbsp;Advanced</label>
@@ -1237,6 +1241,11 @@
             if (savedForceAdvanced === 'true') {
                 forceAgentCheckbox.checked = true;
             }
+            const savedForceBasic = localStorage.getItem('ollama-agent-force-basic');
+            if (savedForceBasic === 'true') {
+                const forceBasicCheckbox = document.getElementById('forceBasicCheckbox');
+                if (forceBasicCheckbox) forceBasicCheckbox.checked = true;
+            }
         }
 
         fallbackModelSelect.addEventListener('change', function() {
@@ -1250,7 +1259,22 @@
 
         forceAgentCheckbox.addEventListener('change', function() {
             localStorage.setItem('ollama-agent-force-advanced', this.checked);
+            if (this.checked) {
+                const forceBasicCb = document.getElementById('forceBasicCheckbox');
+                if (forceBasicCb) forceBasicCb.checked = false;
+            }
         });
+
+        const forceBasicCheckbox = document.getElementById('forceBasicCheckbox');
+        if (forceBasicCheckbox) {
+            forceBasicCheckbox.addEventListener('change', function() {
+                localStorage.setItem('ollama-agent-force-basic', this.checked);
+                if (this.checked) {
+                    forceAgentCheckbox.checked = false;
+                    localStorage.setItem('ollama-agent-force-advanced', 'false');
+                }
+            });
+        }
 
         // Update context indicator with visual bar
         // Token tracker: shows usage for advanced (paid) models, "Free" for local models
@@ -1884,7 +1908,8 @@
                         model: modelSelect.value,
                         fallback_model: fallbackModelSelect.value,
                         base_model: baseModelSelect.value,
-                        force_advanced: forceAgentCheckbox.checked
+                        force_advanced: forceAgentCheckbox.checked,
+                        force_basic: document.getElementById('forceBasicCheckbox').checked
                     }),
                     signal: ctrl.signal
                 });
@@ -2111,7 +2136,8 @@
                         model: modelSelect.value,
                         fallback_model: fallbackModelSelect.value,
                         base_model: baseModelSelect.value,
-                        force_advanced: forceAgentCheckbox.checked
+                        force_advanced: forceAgentCheckbox.checked,
+                        force_basic: document.getElementById('forceBasicCheckbox').checked
                     })
                 });
 

@@ -810,7 +810,16 @@
         <div class="header">
             <div class="header-left">
                 <div class="model-selector">
-                    <label>Model:</label>
+                    <label>Basic:</label>
+                    <select id="baseModelSelect">
+                        <option value="">Auto</option>
+                        {% for model in models %}
+                        <option value="{{ model }}" {% if model == 'gemma4:e4b' %}selected{% endif %}>{{ model }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="model-selector">
+                    <label>Agent:</label>
                     <select id="modelSelect">
                         {% for model in models %}
                         <option value="{{ model }}" {% if model == current_model %}selected{% endif %}>{{ model }}</option>
@@ -825,6 +834,14 @@
                         <option value="{{ model }}">{{ model }}</option>
                         {% endfor %}
                     </select>
+                </div>
+                <div class="model-selector" style="flex-direction:row;align-items:center;gap:4px;">
+                    <input type="checkbox" id="forceAdvanced" title="Force Agent model with tools" style="cursor:pointer;">
+                    <label for="forceAdvanced" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Agent model with tools">Force</label>
+                </div>
+                <div class="model-selector" style="flex-direction:row;align-items:center;gap:4px;">
+                    <input type="checkbox" id="forceBasic" title="Force Basic model only (no escalation)" style="cursor:pointer;">
+                    <label for="forceBasic" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Basic model, never escalate to Agent">Force Basic</label>
                 </div>
                 <div class="context-indicator" id="contextIndicator">
                     <div class="context-bar-bg"><div class="context-bar-fill" id="contextBar" style="width: 0%"></div></div>
@@ -1021,11 +1038,21 @@
             if (savedFallback) {
                 fallbackModelSelect.value = savedFallback;
             }
+            const savedBaseModel = localStorage.getItem('ollama-agent-base-model');
+            if (savedBaseModel && baseModelSelect) {
+                baseModelSelect.value = savedBaseModel;
+            }
         }
 
         fallbackModelSelect.addEventListener('change', function() {
             localStorage.setItem('ollama-agent-fallback', this.value);
         });
+
+        if (baseModelSelect) {
+            baseModelSelect.addEventListener('change', function() {
+                localStorage.setItem('ollama-agent-base-model', this.value);
+            });
+        }
 
         // Update context indicator with visual bar
         async function updateContextIndicator(currentTokens) {
@@ -1511,19 +1538,19 @@
             let fullResponse = '';
 
             try {
-                const ctrl = new AbortController();
-                const timeoutId = setTimeout(() => ctrl.abort(), 300000);  // 5 min timeout
+                // No timeout - wait for Ollama as long as it takes
                 const response = await fetch('/api/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         message: message,
                         model: modelSelect.value,
-                        fallback_model: fallbackModelSelect.value
-                    }),
-                    signal: ctrl.signal
+                        fallback_model: fallbackModelSelect.value,
+                        base_model: baseModelSelect ? baseModelSelect.value : '',
+                        force_advanced: document.getElementById('forceAdvanced') ? document.getElementById('forceAdvanced').checked : false,
+                        force_basic: document.getElementById('forceBasic') ? document.getElementById('forceBasic').checked : false
+                    })
                 });
-                clearTimeout(timeoutId);
 
                 if (!response.ok) {
                     const errData = await response.json().catch(() => ({}));
@@ -1585,6 +1612,17 @@
                                     saveBar.querySelector('button').dataset.code = data.code;
                                     lastMsg.appendChild(saveBar);
                                 }
+                            } else if (data.type === 'escalated') {
+                                // Base model was insufficient, escalated to advanced
+                                console.log('[ROUTING] Escalated from', data.base_model, 'to', data.advanced_model);
+                                const streamMsg = document.getElementById('streaming-message');
+                                if (streamMsg) {
+                                    const escNotif = document.createElement('div');
+                                    escNotif.style.cssText = 'padding:4px 8px;background:rgba(234,179,8,0.15);border:1px solid rgba(234,179,8,0.3);border-radius:4px;font-size:0.75rem;color:#eab308;margin-bottom:4px;';
+                                    escNotif.textContent = '⬆ Escalado a ' + data.advanced_model;
+                                    const contentArea = streamMsg.querySelector('.message-content');
+                                    if (contentArea) contentArea.parentNode.insertBefore(escNotif, contentArea);
+                                }
                             } else if (data.type === 'error') {
                                 fullResponse += `\n\n**Error:** ${data.content}`;
                                 if (contentEl) {
@@ -1605,6 +1643,17 @@
                                         lastMsg.appendChild(ts);
                                     }
                                 }
+                                // Show which model responded
+                                if (data.used_model) {
+                                    const lastMsg = chatArea.querySelector('.message:last-child .message-content');
+                                    if (lastMsg) {
+                                        const modelBadge = document.createElement('div');
+                                        const isBase = data.used_model === (baseModelSelect ? baseModelSelect.value : '');
+                                        modelBadge.style.cssText = 'margin-top:4px;padding:2px 8px;background:' + (isBase ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)') + ';border:1px solid ' + (isBase ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.3)') + ';border-radius:4px;font-size:0.7rem;color:' + (isBase ? '#22c55e' : '#3b82f6') + ';display:inline-block;';
+                                        modelBadge.textContent = (isBase ? '💬' : '🤖') + ' ' + data.used_model;
+                                        lastMsg.appendChild(modelBadge);
+                                    }
+                                }
                                 // Update model status after response (model is now loaded)
                                 checkModelStatus();
                             }
@@ -1614,8 +1663,7 @@
                     }
                 }
             } catch (e) {
-                clearTimeout(timeoutId);
-                const errMsg = e.name === 'AbortError' ? 'Request timed out (5 min). The model may be too slow.' : e.message;
+                const errMsg = e.message || 'Connection error. Please try again.';
                 if (!fullResponse) {
                     if (contentEl) {
                         contentEl.innerHTML = renderMarkdown(`**Error:** ${errMsg}`);
@@ -1656,7 +1704,10 @@
                     body: JSON.stringify({
                         message: message,
                         model: modelSelect.value,
-                        fallback_model: fallbackModelSelect.value
+                        fallback_model: fallbackModelSelect.value,
+                        base_model: baseModelSelect ? baseModelSelect.value : '',
+                        force_advanced: document.getElementById('forceAdvanced') ? document.getElementById('forceAdvanced').checked : false,
+                        force_basic: document.getElementById('forceBasic') ? document.getElementById('forceBasic').checked : false
                     })
                 });
 
@@ -1710,6 +1761,18 @@
             chatArea.appendChild(messageDiv);
             addCopyButtons(messageDiv.querySelector('.message-content'));
             chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        // Mutual exclusion between Force Advanced and Force Basic
+        const forceAdvCb = document.getElementById('forceAdvanced');
+        const forceBasicCb = document.getElementById('forceBasic');
+        if (forceAdvCb && forceBasicCb) {
+            forceAdvCb.addEventListener('change', function() {
+                if (this.checked) forceBasicCb.checked = false;
+            });
+            forceBasicCb.addEventListener('change', function() {
+                if (this.checked) forceAdvCb.checked = false;
+            });
         }
     </script>
 </body>
