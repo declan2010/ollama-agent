@@ -1283,13 +1283,10 @@
                     badge.style.display = 'none';
                 }
 
-                // Show model size if available
+                // Show model parameter size (prioritize over file size)
                 const sizeBytes = info.size || 0;
                 const paramSize = info.details?.parameter_size || info.parameter_size || '';
-                if (sizeBytes > 0) {
-                    const sizeMB = Math.round(sizeBytes / (1024 * 1024));
-                    badge.textContent += ` ${sizeMB > 1024 ? (sizeMB / 1024).toFixed(1) + 'GB' : sizeMB + 'MB'}`;
-                } else if (paramSize) {
+                if (paramSize) {
                     // Normalize parameter size to billions (B)
                     const normalized = paramSize
                         .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
@@ -1297,6 +1294,9 @@
                         .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
                         .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
                     badge.textContent += ` ${normalized}`;
+                } else if (sizeBytes > 0) {
+                    const sizeMB = Math.round(sizeBytes / (1024 * 1024));
+                    badge.textContent += ` ${sizeMB > 1024 ? (sizeMB / 1024).toFixed(1) + 'GB' : sizeMB + 'MB'}`;
                 }
             } catch (e) {
                 badge.style.display = 'none';
