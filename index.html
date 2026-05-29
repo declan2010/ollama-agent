@@ -1286,6 +1286,7 @@
                 // Show model parameter size (prioritize over file size)
                 const sizeBytes = info.size || 0;
                 const paramSize = info.details?.parameter_size || info.parameter_size || '';
+                console.log('DEBUG model-info:', {model: modelSelect.value, paramSize, sizeBytes, details: info.details});
                 if (paramSize) {
                     // Normalize parameter size to billions (B)
                     const normalized = paramSize
