@@ -7,9 +7,9 @@ import json
 import logging
 import os
 import queue
+import uuid
 import re
 import time
-import uuid
 from collections import defaultdict
 from datetime import datetime
 from flask import Flask, Response, render_template, request, jsonify, session
@@ -21,29 +21,6 @@ OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
 KEEP_ALIVE = os.environ.get('OLLAMA_KEEP_ALIVE', '5m')
 BASE_CHAT_MODEL = "gemma4:e4b"
 
-APP_VERSION = "1.8.0"
-
-
-def is_cloud_model(model_name):
-    """Check if a model requires internet (cloud model)."""
-    if not model_name:
-        return False
-    return ':cloud' in model_name or '-cloud' in model_name
-
-
-def is_connectivity_error(error):
-    """Check if an error is caused by network/connectivity issues."""
-    error_str = str(error).lower()
-    connectivity_keywords = [
-        'connection refused', 'connection reset', 'timed out', 'timeout',
-        'name or service not known', 'no route to host', 'network is unreachable',
-        'connectionerror', 'urlopen error', 'ssl', 'certificate_verify',
-        'couldn\'t resolve host', 'couldn\'t connect', 'failed to establish',
-        'err_name_not_resolved', 'enotfound', 'econnrefused', 'econnreset',
-        'etimedout', 'socket.gaierror', 'proxy', '502', '503', '504',
-    ]
-    return any(kw in error_str for kw in connectivity_keywords)
-
 # --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
@@ -52,8 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger('ollama-agent')
 
 app = Flask(__name__)
-app.config['TEMPLATES_AUTO_RELOAD'] = True
-app.secret_key = os.environ.get('SECRET_KEY', 'ollama-webchat-secret-key-change-me')
+app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 
 # --- Rate Limiting ---
 RATE_LIMIT_WINDOW = 60  # seconds
@@ -152,8 +128,6 @@ SAFE_COMMANDS = {
     'netstat': {'flags': {'-tuln', '-tln', '-tulnp'}, 'allow_args': False},
     'echo': {'flags': set(), 'allow_args': True},   # echo for reading (write with > handled separately)
     'printf': {'flags': set(), 'allow_args': True},  # printf for reading (write with > handled separately)
-    'xdg-open': {'flags': set(), 'allow_args': True},  # intercepted - opens HTML in preview, not browser
-    'open': {'flags': set(), 'allow_args': True},      # macOS equivalent of xdg-open
 }
 
 
@@ -229,13 +203,6 @@ def execute_local_command(cmd):
         if parsed is None:
             return "[Security] This command is not allowed."
 
-        # Special handling for xdg-open / open - intercept HTML files for in-chat preview
-        if parsed[0] in ('xdg-open', 'open') and len(parsed) > 1:
-            target = parsed[-1]
-            if target.endswith('.html') or target.endswith('.htm'):
-                # Return a special marker that the frontend will interpret as "show preview"
-                return f"[HTML_PREVIEW:{target}]"
-
         result = sp.run(
             parsed,
             capture_output=True,
@@ -280,103 +247,6 @@ def is_write_command(cmd):
     return False
 
 
-def merge_tool_calls(tool_calls_buffer):
-    """Merge incremental streaming tool call chunks by ID.
-    
-    Ollama's streaming API sends tool calls incrementally — each chunk may
-    contain a partial update with the same tool_call ID. We need to merge
-    these fragments into complete tool calls before executing them.
-    
-    Returns a list of complete, merged tool call dicts.
-    """
-    if not tool_calls_buffer:
-        return []
-    
-    merged = {}  # id -> merged tool call dict
-    ordered_ids = []  # preserve order of first appearance
-    
-    for tc in tool_calls_buffer:
-        tc_id = tc.get('id')
-        func = tc.get('function', {})
-        func_name = func.get('name', '')
-        func_args = func.get('arguments', {})
-        
-        if tc_id is None:
-            # No ID — this might be a complete tool call or a fragment without ID.
-            # If it has a function name, treat it as complete.
-            if func_name:
-                # Use a synthetic ID based on index
-                tc_id = f'_synthetic_{len(merged)}'
-            else:
-                # Incomplete fragment with no name — skip it
-                continue
-        
-        if tc_id in merged:
-            # Merge with existing entry
-            existing = merged[tc_id]
-            existing_func = existing.get('function', {})
-            # Merge function name (prefer non-empty)
-            if func_name and not existing_func.get('name'):
-                existing_func['name'] = func_name
-            # Merge arguments — deep merge dicts, concatenate strings
-            if isinstance(func_args, dict) and isinstance(existing_func.get('arguments'), dict):
-                for k, v in func_args.items():
-                    if k in existing_func['arguments']:
-                        # Concatenate string values (Ollama streams them in pieces)
-                        if isinstance(existing_func['arguments'][k], str) and isinstance(v, str):
-                            existing_func['arguments'][k] += v
-                        else:
-                            # For non-string values, take the newer one if it's more complete
-                            existing_func['arguments'][k] = v
-                    else:
-                        existing_func['arguments'][k] = v
-            elif isinstance(func_args, str) and isinstance(existing_func.get('arguments'), str):
-                # Arguments arriving as JSON string fragments
-                existing['function']['arguments'] += func_args
-            elif func_args and not existing_func.get('arguments'):
-                existing_func['arguments'] = func_args
-            # Preserve internal flags
-            for key in ('_write_action', '_write_denied'):
-                if key in tc and key not in existing:
-                    existing[key] = tc[key]
-        else:
-            # New tool call
-            merged[tc_id] = dict(tc)  # shallow copy
-            ordered_ids.append(tc_id)
-    
-    # Parse any string arguments into dicts (Ollama sometimes sends args as JSON strings)
-    for tc_id in ordered_ids:
-        tc = merged[tc_id]
-        func = tc.get('function', {})
-        args = func.get('arguments')
-        if isinstance(args, str):
-            try:
-                func['arguments'] = json.loads(args)
-            except json.JSONDecodeError:
-                # Partial JSON from streaming — try to fix common issues
-                try:
-                    # Try adding closing braces
-                    func['arguments'] = json.loads(args + '}')
-                except json.JSONDecodeError:
-                    # Can't parse, keep as-is (might still work as a raw command string)
-                    logger.warning("Could not parse tool call arguments as JSON: %s", args[:200])
-    
-    return [merged[tid] for tid in ordered_ids]
-
-
-def parse_tool_args(args):
-    """Parse tool call arguments, handling both dict and JSON string formats.
-    Ollama sometimes sends arguments as a JSON string rather than a dict."""
-    if isinstance(args, dict):
-        return args
-    if isinstance(args, str):
-        try:
-            return json.loads(args)
-        except json.JSONDecodeError:
-            return {}
-    return {}
-
-
 def check_write_permission(cmd, session_id):
     """Check if a write command is allowed for this session.
     Returns 'allowed' if the command can proceed, or 'ask' if permission is needed."""
@@ -401,8 +271,6 @@ def execute_write_command(cmd, session_id):
         if not cmd:
             return "[Error] Empty command"
 
-        logger.info("execute_write_command: session=%s, cmd=%s", session_id, cmd[:300])
-
         # For write commands, we execute with shell=True but with basic safety
         # (the permission system is the safety gate)
         # Still block truly catastrophic patterns
@@ -411,54 +279,17 @@ def execute_write_command(cmd, session_id):
             if pattern in cmd:
                 return "[Security] This command is blocked for safety."
 
-        # Special handling: intercept xdg-open of HTML files in compound commands
-        # Split by && or ; to find xdg-open commands
-        xdg_open_html = None
-        import re
-        parts = re.split(r'[;&]', cmd)
-        for part in parts:
-            part = part.strip()
-            if (part.startswith('xdg-open ') or part.startswith('open ')) and len(part.split()) >= 2:
-                target = part.split(None, 1)[1].strip()
-                if target.endswith('.html') or target.endswith('.htm'):
-                    xdg_open_html = target
-                    # Remove this part from the command so we don't actually call xdg-open
-                    cmd = cmd.replace(part, '').strip()
-                    # Clean up leftover && or ;
-                    cmd = re.sub(r'\s*&&\s*', ' && ', cmd).strip(' ;&')
-                    break
+        result = sp.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=os.path.expanduser('~')
+        )
 
-        # Use bash to properly handle heredocs, pipes, redirections, etc.
-        # shell=True with a string requires bash for heredoc support
-        if cmd:
-            result = sp.run(
-                ['bash', '-c', cmd],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                cwd=os.path.expanduser('~')
-            )
-
-            output = result.stdout.strip() or result.stderr.strip() or ""
-            if result.returncode != 0:
-                stderr = result.stderr.strip()
-                if stderr:
-                    output = f"[Exit code {result.returncode}] {output}\nstderr: {stderr}" if output else f"[Exit code {result.returncode}] {stderr}"
-                elif not output:
-                    output = f"[Exit code {result.returncode}] Command failed with no output"
-            elif not output:
-                output = "Command executed successfully (no output)"
-            logger.info("Write command result (session=%s, rc=%d): %s", session_id, result.returncode, output[:200])
-        else:
-            output = ""
-
-        # If we intercepted an xdg-open for HTML, add the preview marker
-        if xdg_open_html:
-            if output:
-                output += f"\n[HTML_PREVIEW:{xdg_open_html}]"
-            else:
-                output = f"[HTML_PREVIEW:{xdg_open_html}]"
-
+        output = result.stdout.strip() or result.stderr.strip() or "Command executed successfully (no output)"
+        logger.info("Executed write command (session=%s): %s", session_id, cmd)
         return output[:5000]
 
     except sp.TimeoutExpired:
@@ -651,17 +482,16 @@ def process_ollama_response(model, messages, tools=None):
         tool_results = []
         for tool_call in tool_calls:
             func_name = tool_call.get('function', {}).get('name', '')
-            func_args = parse_tool_args(tool_call.get('function', {}).get('arguments', {}))
+            func_args = tool_call.get('function', {}).get('arguments', {})
             tool_id = tool_call.get('id', f'tool_{i}')
 
             logger.info("Tool call #%d: %s(%s)", i + 1, func_name, json.dumps(func_args))
 
             if func_name == 'local_command':
                 cmd = func_args.get('command', '')
-                # Execute write commands too (auto-approved in non-streaming fallback)
+                # Check if this is a write command
                 if is_write_command(cmd):
-                    logger.info("Non-streaming: executing write command: %s", cmd[:200])
-                    result = execute_write_command(cmd, 'non-streaming')
+                    result = "[Security] Write commands require streaming mode for permission confirmation. Please retry in streaming mode."
                 else:
                     result = execute_local_command(cmd)
                 tool_results.append({
@@ -888,93 +718,17 @@ def index():
         session['chat_id'] = str(uuid.uuid4())[:8]
         session['model'] = models[0] if models else 'llama3'
 
-    # Separate models into local and cloud for template
-    all_models = get_ollama_models()
-    local_models = [m for m in all_models if ':cloud' not in m and '-cloud' not in m and not m.startswith('x/') and 'embed' not in m.lower()]
-    cloud_models = [m for m in all_models if ':cloud' in m or '-cloud' in m]
-    if not local_models:
-        local_models = ['gemma4:e4b']  # fallback default
-    if not cloud_models:
-        cloud_models = all_models  # fallback: show all if no cloud models
-
     return render_template('index.html',
-                           models=all_models,
-                           local_models=local_models,
-                           cloud_models=cloud_models,
+                           models=models,
                            sessions=sessions,
                            current_model=session.get('model', ''),
-                           base_chat_model=BASE_CHAT_MODEL,
-                           version=APP_VERSION)
+                           base_chat_model=BASE_CHAT_MODEL)
 
 
 @app.route('/api/models')
 def api_models():
     """API to get models"""
     return jsonify(get_ollama_models())
-
-
-@app.route('/api/models/local')
-def api_models_local():
-    """API to get local (non-cloud) models only"""
-    all_models = get_ollama_models()
-    local = [m for m in all_models if ':cloud' not in m and '-cloud' not in m and not m.startswith('x/') and 'embed' not in m.lower()]
-    if not local:
-        logger.info("No local models found, pulling llama3.2:1b...")
-        try:
-            import urllib.request
-            pull_req = urllib.request.Request(
-                f'{OLLAMA_BASE_URL}/api/pull',
-                data=json.dumps({"name": "llama3.2:1b", "stream": False}).encode(),
-                headers={"Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(pull_req, timeout=300) as pull_resp:
-                pull_data = json.loads(pull_resp.read())
-                logger.info("Pulled llama3.2:1b: %s", pull_data.get('status', 'done'))
-        except Exception as pull_err:
-            logger.error("Failed to pull fallback model: %s", pull_err)
-        # Refresh
-        all_models = get_ollama_models()
-        local = [m for m in all_models if ':cloud' not in m and '-cloud' not in m and not m.startswith('x/') and 'embed' not in m.lower()]
-    return jsonify(local)
-
-
-@app.route('/api/models/download', methods=['POST'])
-def api_models_download():
-    """Download a model via Ollama pull. Returns SSE progress."""
-    data = request.json or {}
-    model_name = data.get('model', '')
-    if not model_name:
-        return jsonify({'error': 'Model name required'}), 400
-
-    def generate():
-        import urllib.request
-        try:
-            yield f"data: {json.dumps({'type': 'progress', 'status': 'pulling', 'model': model_name})}\n\n"
-            pull_req = urllib.request.Request(
-                f'{OLLAMA_BASE_URL}/api/pull',
-                data=json.dumps({"name": model_name, "stream": True}).encode(),
-                headers={"Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(pull_req, timeout=600) as pull_resp:
-                for line in pull_resp:
-                    try:
-                        chunk = json.loads(line)
-                        status = chunk.get('status', '')
-                        if 'total' in chunk and 'completed' in chunk:
-                            pct = int(chunk['completed'] / chunk['total'] * 100) if chunk['total'] > 0 else 0
-                            yield f"data: {json.dumps({'type': 'progress', 'status': status, 'model': model_name, 'percent': pct, 'completed': chunk['completed'], 'total': chunk['total']})}\n\n"
-                        elif status == 'success':
-                            yield f"data: {json.dumps({'type': 'progress', 'status': 'success', 'model': model_name})}\n\n"
-                        else:
-                            yield f"data: {json.dumps({'type': 'progress', 'status': status, 'model': model_name})}\n\n"
-                    except json.JSONDecodeError:
-                        continue
-            yield f"data: {json.dumps({'type': 'done', 'model': model_name})}\n\n"
-        except Exception as e:
-            logger.error("Model download failed: %s", e)
-            yield f"data: {json.dumps({'type': 'error', 'model': model_name, 'error': str(e)})}\n\n"
-
-    return Response(generate(), mimetype='text/event-stream')
 
 
 @app.route('/api/model-info')
@@ -1061,28 +815,28 @@ def _likely_needs_tools(message):
     if any(kw in msg_lower for kw in analysis_keywords):
         return True
     
-    # File/system/code operations - specific phrases and commands only
+    # File/system/code operations
     file_keywords = [
         # Spanish
         'archivo', 'carpeta', 'directorio', 'borrar', 'eliminar', 'editar',
-        'modificar', 'guardar', 'crear archivo',
-        'instalar', 'ejecutar', 'comando', 'terminal', 'consola',
+        'modificar', 'cambiar', 'escribir', 'guardar', 'crear archivo',
+        'instalar', 'ejecutar', 'correr', 'comando', 'terminal', 'consola',
         'escribí un script', 'haz un script', 'crea un script', 'genera un script',
         'haz un programa', 'crea un programa', 'programa un', 'codifica', 'codificar',
-        'lee el archivo', 'muestra el archivo', 'abre el archivo',
+        'lee el archivo', 'muestra el archivo', 'abre el archivo', 'cierra el archivo',
         'listar archivos', 'mover archivo', 'copiar archivo', 'renombrar',
         'compilar', 'deployar', 'desplegar', 'subir al server', 'git push',
         'commit', 'hacer commit', 'base de datos', 'sql', 'query',
-        'permisos', 'chmod', 'matar proceso', 'kill process',
+        'permisos', 'chmod', 'proceso', 'matar proceso', 'kill process',
         # English
-        'file', 'folder', 'directory', 'delete', 'remove file', 'edit file',
-        'modify', 'create file', 'install', 'execute', 'run command',
-        'terminal', 'shell', 'bash', 'write a script', 'create a script',
+        'file', 'folder', 'directory', 'delete', 'remove', 'edit', 'modify',
+        'write', 'save', 'create file', 'install', 'execute', 'run', 'command',
+        'terminal', 'shell', 'bash', 'script', 'write a script', 'create a script',
         'code up', 'code this', 'program this', 'implement', 'build a tool',
         'read the file', 'show me the file', 'open the file', 'cat ', 'ls ',
         'grep ', 'head ', 'tail ', 'list files', 'move file', 'copy file',
         'rename', 'compile', 'deploy', 'push to', 'git commit', 'database',
-        'sql', 'query', 'permissions', 'chmod', 'kill process',
+        'sql', 'query', 'permissions', 'chmod', 'process', 'kill process',
     ]
     if any(kw in msg_lower for kw in file_keywords):
         return True
@@ -1132,32 +886,28 @@ def _likely_needs_tools(message):
     # Data/math/computation
     data_keywords = [
         # Spanish
-        'gráfico', 'gráfica', 'estadística', 'dataset',
-        'cálculo', 'fórmula', 'ecuación',
+        'gráfico', 'gráfica', 'tabla', 'estadística', 'datos', 'dataset',
+        'cálculo', 'calcular', 'fórmula', 'ecuación', 'porcentaje',
+        'promedio', 'media', 'mediana', 'varianza',
         # English
-        'chart', 'graph', 'plot', 'statistics', 'dataset',
-        'computation', 'formula', 'equation', 'correlation',
+        'chart', 'graph', 'plot', 'table', 'statistics', 'data', 'dataset',
+        'calculate', 'computation', 'formula', 'equation', 'percentage',
+        'average', 'mean', 'median', 'variance', 'correlation',
     ]
     if any(kw in msg_lower for kw in data_keywords):
         return True
     
-    # Creation/generation tasks - only phrases, not short words
-    # Short words like 'crea', 'write', 'data' are too ambiguous and cause false positives
+    # Creation/generation tasks
     creation_keywords = [
-        # Spanish - phrases only
-        'genera un', 'generar un', 'crea un', 'crear un', 'diseña un', 'diseñar un',
-        'escribí un script', 'escribir un script', 'escribí un archivo', 'escribir un archivo',
-        'escribí un programa', 'escribir un programa',
-        'redacta un', 'redactar un',
-        'construye un', 'construir un', 'arma un', 'armar un',
-        'desarrolla un', 'desarrollar un',
+        # Spanish
+        'genera', 'generar', 'crea', 'crear', 'diseña', 'diseñar',
+        'escribe', 'escribir', 'redacta', 'redactar', 'produce', 'producir',
+        'construye', 'construir', 'arma', 'armar', 'desarrolla', 'desarrollar',
         'haz una lista', 'haz una tabla', 'haz un resumen', 'haz un informe',
-        'haz un script', 'haz un programa', 'haz un archivo',
-        # English - phrases only
-        'write a script', 'write a file', 'write a program', 'write a file',
-        'generate a', 'create a', 'design a',
-        'build a tool', 'develop a',
-        'make a list', 'make a table', 'make a summary', 'make a report',
+        # English
+        'generate', 'create', 'design', 'write', 'draft', 'compose',
+        'produce', 'build', 'develop', 'make a list', 'make a table',
+        'make a summary', 'make a report', 'put together',
     ]
     if any(kw in msg_lower for kw in creation_keywords):
         return True
@@ -1442,19 +1192,24 @@ def api_chat_stream():
                         eval_count = chunk.get('eval_count', 0)
 
                         # If we have pending tool calls, process them
-                        # IMPORTANT: Merge streaming fragments first — Ollama sends
-                        # tool calls incrementally, so we may have multiple partial
-                        # chunks for the same tool call that need to be assembled.
                         if tool_calls_buffer:
-                            merged_tool_calls = merge_tool_calls(tool_calls_buffer)
-                            logger.info("Merged %d raw tool call chunks into %d complete tool calls",
-                                        len(tool_calls_buffer), len(merged_tool_calls))
-
-                            # Pre-process write commands: check permissions
-                            write_cmds_to_request = []
-                            for i_t, tc in enumerate(merged_tool_calls):
+                            # Pre-process write commands: check permissions via SSE
+                            write_cmd_indices = []
+                            for i_t, tc in enumerate(tool_calls_buffer):
                                 tc_name = tc.get('function', {}).get('name', '')
-                                tc_args = parse_tool_args(tc.get('function', {}).get('arguments', {}))
+                                tc_args = tc.get('function', {}).get('arguments', {})
+                                if tc_name == 'local_command':
+                                    cmd = tc_args.get('command', '')
+                                    if is_write_command(cmd):
+                                        perm = check_write_permission(cmd, current_chat_id)
+                                        if perm == 'ask':
+                                            write_cmd_indices.append((i_t, cmd))
+
+                            # Collect write commands that need permission
+                            write_cmds_to_request = []
+                            for i_t, tc in enumerate(tool_calls_buffer):
+                                tc_name = tc.get('function', {}).get('name', '')
+                                tc_args = tc.get('function', {}).get('arguments', {})
                                 if tc_name == 'local_command':
                                     cmd = tc_args.get('command', '')
                                     if is_write_command(cmd):
@@ -1469,69 +1224,31 @@ def api_chat_stream():
                                                 'q': queue.Queue()
                                             }
 
-                            # Handle write command permissions:
-                            # - First write in session: ask user (yield permission popup, block until answered)
-                            # - Subsequent writes: auto-approve (user already granted session permission)
+                            # If there are write commands needing permission, auto-approve for now
+                            # and notify the user what was executed
+                            # (SSE permission popup doesn't work reliably due to buffering)
                             if write_cmds_to_request:
-                                # Check which ones need to ask vs auto-approve
-                                need_to_ask = []
-                                auto_approved = []
                                 for item in write_cmds_to_request:
-                                    perm = check_write_permission(item['cmd'], current_chat_id)
-                                    if perm == 'ask':
-                                        # First write in this session - ask user
-                                        need_to_ask.append(item)
-                                    else:
-                                        # Already approved for session/once - auto-approve
-                                        auto_approved.append(item)
-
-                                # Auto-approve ones that don't need asking
-                                for item in auto_approved:
-                                    logger.info("Auto-approving write command (session perm): %s", item['cmd'])
-                                    merged_tool_calls[item['idx']]['_write_approved'] = True
-                                if auto_approved:
-                                    yield f"data: {json.dumps({'type': 'write_executed', 'commands': [item['cmd'] for item in auto_approved], 'session_id': current_chat_id})}\n\n"
-
-                                # Ask user for first write in session
-                                for item in need_to_ask:
-                                    logger.info("Asking user permission for write command: %s", item['cmd'])
-                                    yield f"data: {json.dumps({'type': 'write_permission_required', 'command': item['cmd'], 'session_id': current_chat_id, 'perm_id': item['perm_id']})}\n\n"
-                                    # Block until user responds via the /api/write-permission endpoint
-                                    perm_queue = _pending_permissions[item['perm_id']]['q']
-                                    action = perm_queue.get()  # blocks until frontend responds
-                                    del _pending_permissions[item['perm_id']]
-                                    if action == 'deny':
-                                        merged_tool_calls[item['idx']]['_write_denied'] = True
-                                    elif action == 'session':
-                                        _session_write_permissions[current_chat_id] = 'session'
-                                        merged_tool_calls[item['idx']]['_write_approved'] = True
-                                    elif action == 'once':
-                                        _session_write_permissions[current_chat_id] = 'once'
-                                        merged_tool_calls[item['idx']]['_write_approved'] = True
-                                    else:
-                                        merged_tool_calls[item['idx']]['_write_denied'] = True
+                                    logger.info("Auto-approving write command: %s", item['cmd'])
+                                    tc = tool_calls_buffer[item['idx']]
+                                    tc['_write_action'] = 'once'
+                                # Notify user what commands are being executed
+                                cmds_str = ', '.join([item['cmd'] for item in write_cmds_to_request])
+                                yield f"data: {json.dumps({'type': 'write_executed', 'commands': [item['cmd'] for item in write_cmds_to_request], 'session_id': current_chat_id})}\n\n"
 
                             # Process tool calls - now with write permission resolved
                             tool_results = _process_tool_calls_streaming(
-                                model, session_data, merged_tool_calls,
+                                model, session_data, tool_calls_buffer,
                                 full_response, prompt_tokens, current_chat_id
                             )
-                            # Check for HTML preview markers in tool results and notify frontend
-                            for tr in tool_results:
-                                if tr.get('content') and '[HTML_PREVIEW:' in tr['content']:
-                                    import re
-                                    matches = re.findall(r'\[HTML_PREVIEW:([^\]]+)\]', tr['content'])
-                                    for path in matches:
-                                        yield f"data: {json.dumps({'type': 'html_preview', 'path': path})}\n\n"
                             # Send tool results back to Ollama for final response
                             followup_messages = []
                             for msg in session_data['messages']:
                                 followup_messages.append({'role': msg['role'], 'content': msg['content']})
                             # Add assistant message with tool calls (strip internal flags first)
                             clean_tool_calls = []
-                            for tc in merged_tool_calls:
-                                clean_tc = {k: v for k, v in tc.items()
-                                            if k not in ('_write_approved', '_write_denied', '_write_action')}
+                            for tc in tool_calls_buffer:
+                                clean_tc = {k: v for k, v in tc.items() if k != '_write_denied'}
                                 clean_tool_calls.append(clean_tc)
                             followup_messages.append({'role': 'assistant', 'content': full_response or '', 'tool_calls': clean_tool_calls})
                             # Add tool results
@@ -1568,7 +1285,7 @@ def api_chat_stream():
                                     # Check if any of the tool calls are write commands - if so, let them execute
                                     has_write_cmd = False
                                     for tc in followup_tool_calls:
-                                        tc_args = parse_tool_args(tc.get('function', {}).get('arguments', {}))
+                                        tc_args = tc.get('function', {}).get('arguments', {})
                                         if tc.get('function', {}).get('name') == 'local_command' and is_write_command(tc_args.get('command', '')):
                                             has_write_cmd = True
                                             break
@@ -1583,7 +1300,7 @@ def api_chat_stream():
                                         followup_messages.append({'role': 'assistant', 'content': followup_content, 'tool_calls': followup_tool_calls})
                                         for tc in followup_tool_calls:
                                             tc_name = tc.get('function', {}).get('name', '')
-                                            tc_args = parse_tool_args(tc.get('function', {}).get('arguments', {}))
+                                            tc_args = tc.get('function', {}).get('arguments', {})
                                             tc_id = tc.get('id', f'tool_{round_num}_{len(followup_tool_calls)}')
                                             if tc_name == 'local_command':
                                                 cmd = tc_args.get('command', '')
@@ -1643,7 +1360,7 @@ def api_chat_stream():
                                     followup_messages.append({'role': 'assistant', 'content': '', 'tool_calls': followup_tool_calls})
                                     for tc in followup_tool_calls:
                                         tc_name = tc.get('function', {}).get('name', '')
-                                        tc_args = parse_tool_args(tc.get('function', {}).get('arguments', {}))
+                                        tc_args = tc.get('function', {}).get('arguments', {})
                                         tc_id = tc.get('id', f'tool_{round_num}_{len(followup_tool_calls)}')
                                         logger.info("Follow-up tool call: %s(%s)", tc_name, json.dumps(tc_args))
                                         if tc_name == 'web_search':
@@ -1669,8 +1386,6 @@ def api_chat_stream():
                                             if is_write_command(cmd):
                                                 perm = check_write_permission(cmd, current_chat_id)
                                                 if perm == 'ask':
-                                                    # First write in session - ask user
-                                                    logger.info("Follow-up write needs permission: %s", cmd)
                                                     perm_id = str(uuid.uuid4())
                                                     q = queue.Queue()
                                                     _pending_permissions[perm_id] = {
@@ -1683,18 +1398,16 @@ def api_chat_stream():
                                                     del _pending_permissions[perm_id]
                                                     if action == 'deny':
                                                         tr_content = "[Permission denied] Task cancelled"
-                                                    elif action == 'session':
-                                                        _session_write_permissions[current_chat_id] = 'session'
-                                                        tr_content = execute_write_command(cmd, current_chat_id)
                                                     elif action == 'once':
-                                                        # Set to 'session' so rest of conversation auto-approves
+                                                        _session_write_permissions[current_chat_id] = 'none'
+                                                        tr_content = execute_write_command(cmd, current_chat_id)
+                                                    elif action == 'session':
                                                         _session_write_permissions[current_chat_id] = 'session'
                                                         tr_content = execute_write_command(cmd, current_chat_id)
                                                     else:
                                                         tr_content = "[Permission denied] Task cancelled"
                                                 else:
-                                                    # Already approved for session - auto-approve
-                                                    logger.info("Follow-up write auto-approved (session perm): %s", cmd)
+                                                    # perm == 'allowed', already approved
                                                     tr_content = execute_write_command(cmd, current_chat_id)
                                             else:
                                                 tr_content = execute_local_command(cmd)
@@ -1781,107 +1494,39 @@ def api_chat_stream():
                 # If response was empty and no tool calls, try fallback
                 if not full_response and not tool_calls_buffer:
                     if fallback_model and fallback_model != model:
-                        # Smart fallback: skip cloud fallback if primary is cloud and failed
-                        if is_cloud_model(model) and is_cloud_model(fallback_model):
-                            logger.info("Primary cloud model empty response and fallback is also cloud — showing connectivity error")
-                            full_response = "⚠️ **No internet connection**\n\nCloud models are currently unavailable.\n\n**Suggestions:**\n- Select a local model in the **Basic** dropdown\n- Check the **Force** checkbox next to Basic to use only local models\n- Check your internet connection"
-                        else:
-                            logger.info("Primary model '%s' empty response, trying fallback '%s'", model, fallback_model)
-                            yield f"data: {json.dumps({'type': 'model_routing', 'route': 'fallback', 'model': fallback_model, 'reason': 'empty_response'})}\n\n"
-                            payload['model'] = fallback_model
-                            data_bytes = json.dumps(payload).encode('utf-8')
-                            req2 = urllib.request.Request(
-                                f'{OLLAMA_BASE_URL}/api/chat',
-                                data=data_bytes,
-                                headers={'Content-Type': 'application/json'}
-                            )
-                            with urllib.request.urlopen(req2, timeout=300) as response2:
-                                for line in response2:
-                                    line = line.decode('utf-8').strip()
-                                    if not line:
-                                        continue
-                                    try:
-                                        chunk = json.loads(line)
-                                    except json.JSONDecodeError:
-                                        continue
-                                    if chunk.get('done'):
-                                        prompt_tokens = chunk.get('prompt_eval_count', 0)
-                                        eval_count = chunk.get('eval_count', 0)
-                                        used_model = fallback_model
-                                        break
-                                    content = chunk.get('message', {}).get('content', '')
-                                    if content:
-                                        full_response += content
-                                        sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
-                                        yield f"data: {sse_data}\n\n"
+                        logger.info("Primary model '%s' empty response, trying fallback '%s'", model, fallback_model)
+                        yield f"data: {json.dumps({'type': 'model_routing', 'route': 'fallback', 'model': fallback_model, 'reason': 'empty_response'})}\n\n"
+                        payload['model'] = fallback_model
+                        data_bytes = json.dumps(payload).encode('utf-8')
+                        req2 = urllib.request.Request(
+                            f'{OLLAMA_BASE_URL}/api/chat',
+                            data=data_bytes,
+                            headers={'Content-Type': 'application/json'}
+                        )
+                        with urllib.request.urlopen(req2, timeout=300) as response2:
+                            for line in response2:
+                                line = line.decode('utf-8').strip()
+                                if not line:
+                                    continue
+                                try:
+                                    chunk = json.loads(line)
+                                except json.JSONDecodeError:
+                                    continue
+                                if chunk.get('done'):
+                                    prompt_tokens = chunk.get('prompt_eval_count', 0)
+                                    eval_count = chunk.get('eval_count', 0)
+                                    used_model = fallback_model
+                                    break
+                                content = chunk.get('message', {}).get('content', '')
+                                if content:
+                                    full_response += content
+                                    sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
+                                    yield f"data: {sse_data}\n\n"
 
         except Exception as e:
             logger.error("Streaming error: %s", e)
-
-            # Smart error handling: detect connectivity issues
-            conn_error = is_connectivity_error(e)
-            both_cloud = is_cloud_model(model) and (not fallback_model or is_cloud_model(fallback_model))
-            primary_cloud = is_cloud_model(model)
-
-            if conn_error and primary_cloud:
-                # Advanced/cloud model failed due to connectivity
-                if both_cloud:
-                    # Both primary and fallback are cloud — no point trying fallback
-                    error_msg = "⚠️ **No internet connection**\n\n"
-                    error_msg += "Cloud models are currently unavailable.\n\n"
-                    error_msg += "**Suggestions:**\n"
-                    error_msg += "- Select a local model in the **Basic** dropdown\n"
-                    error_msg += "- Check the **Force** checkbox next to Basic to use only local models\n"
-                    error_msg += "- Check your internet connection"
-                elif fallback_model and not is_cloud_model(fallback_model):
-                    # Primary cloud failed, but fallback is local — try it
-                    error_msg = f"⚠️ Cloud model **{model}** unavailable (no connection). Trying local model **{fallback_model}**...\n\n"
-                    yield f"data: {json.dumps({'type': 'token', 'content': error_msg, 'ts': round(time.time() - start_time, 2)})}\n\n"
-                    try:
-                        fb_payload = payload.copy() if 'payload' in dir() else {'messages': session_data['messages']}
-                        fb_payload['model'] = fallback_model
-                        fb_data_bytes = json.dumps(fb_payload).encode('utf-8')
-                        fb_req = urllib.request.Request(
-                            f'{OLLAMA_BASE_URL}/api/chat',
-                            data=fb_data_bytes,
-                            headers={'Content-Type': 'application/json'}
-                        )
-                        fb_full = ''
-                        with urllib.request.urlopen(fb_req, timeout=300) as fb_resp:
-                            for fb_line in fb_resp:
-                                fb_line = fb_line.decode('utf-8').strip()
-                                if not fb_line: continue
-                                try:
-                                    fb_chunk = json.loads(fb_line)
-                                except json.JSONDecodeError: continue
-                                if fb_chunk.get('done'):
-                                    prompt_tokens = fb_chunk.get('prompt_eval_count', 0)
-                                    used_model = fallback_model
-                                    break
-                                fb_content = fb_chunk.get('message', {}).get('content', '')
-                                if fb_content:
-                                    fb_full += fb_content
-                                    yield f"data: {json.dumps({'type': 'token', 'content': fb_content, 'ts': round(time.time() - start_time, 2)})}\n\n"
-                        if fb_full:
-                            full_response = f"[Usando {fallback_model} porque {model} no está disponible]\n\n{fb_full}"
-                            used_model = fallback_model
-                    except Exception as fb_err:
-                        logger.error("Fallback model also failed: %s", fb_err)
-                        error_msg = "❌ **No models available**\n\n"
-                        error_msg += "Could not reach either the cloud or local model.\n"
-                        error_msg += "Make sure Ollama is running: `ollama serve`"
-                        yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
-                else:
-                    error_msg = f"⚠️ Connection error with **{model}**. Check your internet connection."
-                    yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
-            else:
-                # Generic error
-                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
-
-            # Always send done event so frontend doesn't hang
-            elapsed = round(time.time() - start_time, 2)
-            yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model, 'is_local': used_model == base_model})}\n\n"
-            # Save what we have
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+            # Still save what we have
             if full_response:
                 session_data['messages'].append({
                     'role': 'assistant',
@@ -1932,22 +1577,19 @@ def _process_tool_calls_streaming(model, session_data, tool_calls, current_conte
     tool_results = []
     for i, tool_call in enumerate(tool_calls):
         func_name = tool_call.get('function', {}).get('name', '')
-        func_args = parse_tool_args(tool_call.get('function', {}).get('arguments', {}))
+        func_args = tool_call.get('function', {}).get('arguments', {})
         tool_id = tool_call.get('id', f'tool_{i}')
 
         logger.info("Stream tool call: %s(%s)", func_name, json.dumps(func_args))
 
         if func_name == 'local_command':
             cmd = func_args.get('command', '')
-            # Check if this was denied or approved by the permission system
+            # Check if this was denied by the permission system
             if tool_call.get('_write_denied'):
                 result = "[Permission denied] Task cancelled"
             elif is_write_command(cmd):
-                # Write command — execute it (permission was already auto-approved
-                # or granted by the user via the SSE permission flow)
-                logger.info("Executing write command: %s", cmd[:200])
+                # Write command with permission granted - execute it
                 result = execute_write_command(cmd, current_chat_id)
-                logger.info("Write command result: %s", str(result)[:200])
             else:
                 result = execute_local_command(cmd)
             tool_results.append({'role': 'tool', 'content': result, 'tool_call_id': tool_id})
@@ -1984,7 +1626,6 @@ def api_chat():
     fallback_model = data.get('fallback_model', '')
     base_model = data.get('base_model', '') or BASE_CHAT_MODEL
     force_basic = data.get('force_basic', False)
-    force_advanced = data.get('force_advanced', False)
 
     if not user_message:
         return jsonify({'error': 'Empty message'})
@@ -2066,92 +1707,20 @@ def api_chat():
             eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
             used_model = result.get('used_model', model) if isinstance(result, dict) else model
             is_local = (used_model == base_model)
-    elif force_advanced or _likely_needs_tools(user_message):
-        # Use advanced model with tools directly
-        reason = 'forced' if force_advanced else 'needs_tools'
-        logger.info("Non-streaming: using advanced model %s directly (reason=%s)", model, reason)
+    else:
+        # Use Ollama tools (no regex-based command detection)
         result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
         response_text = result.get('response', '') if isinstance(result, dict) else result
         prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
-        eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
-        used_model = model
-        is_local = False
-    else:
-        # Try base model first for simple queries (dual-model routing)
-        logger.info("Non-streaming: trying base model %s for simple query", base_model)
-        try:
-            import urllib.request as _urllib_base
-            base_api_messages = [{'role': 'system', 'content': 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'}]
-            for msg in session_data['messages']:
-                base_api_messages.append({
-                    'role': msg['role'],
-                    'content': msg['content']
-                })
-            base_payload = {
-                'model': base_model,
-                'messages': base_api_messages,
-                'stream': False,
-                'keep_alive': KEEP_ALIVE,
-            }
-            base_data_bytes = json.dumps(base_payload).encode('utf-8')
-            base_req = _urllib_base.Request(
-                f'{OLLAMA_BASE_URL}/api/chat',
-                data=base_data_bytes,
-                headers={'Content-Type': 'application/json'}
-            )
-            with _urllib_base.urlopen(base_req, timeout=300) as base_resp:
-                base_result = json.loads(base_resp.read().decode('utf-8'))
-            base_response = base_result.get('message', {}).get('content', '')
-            base_stripped = base_response.strip()
-            # Check for weak/ignorant answers
-            weak_patterns = [
-                'no sé', 'no se', 'no tengo', 'no puedo', 'i don\'t know', 'i cannot',
-                'as an ai', 'as a language model', 'como modelo de lenguaje',
-                'no tengo acceso', 'i don\'t have access', 'i can\'t help',
-            ]
-            is_weak = any(p in base_stripped.lower() for p in weak_patterns)
-            if base_stripped and len(base_stripped) >= 10 and not is_weak:
-                # Base model succeeded
-                response_text = base_response
-                prompt_tokens = base_result.get('prompt_eval_count', 0)
-                eval_count_val = base_result.get('eval_count', 0)
-                used_model = base_model
-                is_local = True
-            else:
-                # Escalate to advanced model
-                logger.info("Base model insufficient (len=%d, weak=%s), escalating to %s", len(base_stripped), is_weak, model)
-                result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
-                response_text = result.get('response', '') if isinstance(result, dict) else result
-                prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
-                eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
-                used_model = model
-                is_local = False
-        except Exception as e:
-            logger.warning("Base model %s failed: %s, falling back to advanced", base_model, e)
-            result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
-            response_text = result.get('response', '') if isinstance(result, dict) else result
-            prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
-            eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
-            used_model = model
-            is_local = False
 
-    # Fallback model — smart: don't try cloud fallback if connectivity failed
+    # Fallback model
     if (response_text.startswith('Error:') or response_text.startswith('[ERROR]')) and fallback_model and fallback_model != model:
-        # If primary is cloud and failed with connectivity, check if fallback is also cloud
-        primary_is_cloud = is_cloud_model(model)
-        fallback_is_cloud = is_cloud_model(fallback_model)
-
-        if primary_is_cloud and fallback_is_cloud:
-            # Both cloud — skip fallback, show user-friendly error
-            logger.info("Primary cloud model failed and fallback is also cloud — skipping fallback")
-            response_text = "⚠️ **No internet connection**\n\nCloud models are currently unavailable.\n\n**Suggestions:**\n- Select a local model in the **Basic** dropdown\n- Check the **Force** checkbox next to Basic to use only local models\n- Check your internet connection"
-        else:
-            logger.info("Primary model '%s' failed, trying fallback '%s'", model, fallback_model)
-            result = process_ollama_response(fallback_model, session_data['messages'], OLLAMA_TOOLS)
-            response_text = result.get('response', '') if isinstance(result, dict) else result
-            prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
-            if not response_text.startswith('Error:') and not response_text.startswith('[ERROR]'):
-                response_text = f"[Fallback: {fallback_model}]\n\n{response_text}"
+        logger.info("Primary model '%s' failed, trying fallback '%s'", model, fallback_model)
+        result = process_ollama_response(fallback_model, session_data['messages'], OLLAMA_TOOLS)
+        response_text = result.get('response', '') if isinstance(result, dict) else result
+        prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
+        if not response_text.startswith('Error:') and not response_text.startswith('[ERROR]'):
+            response_text = f"[Fallback: {fallback_model}]\n\n{response_text}"
 
     session_data['messages'].append({
         'role': 'assistant',
@@ -2282,69 +1851,6 @@ def api_session_save():
         return jsonify({'success': True})
 
     return jsonify({'error': 'Session not found'})
-
-
-@app.route('/api/preview/<preview_id>', methods=['GET'])
-def api_preview(preview_id):
-    """Serve an HTML file in a sandboxed iframe (no JS, no parent access).
-    Supports ?path=/full/path/to/file.html to serve any HTML file."""
-    html_path = request.args.get('path', '')
-    
-    # If no path param, look for preview_id.html in the previews dir
-    if not html_path:
-        preview_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'previews')
-        html_path = os.path.join(preview_dir, f'{preview_id}.html')
-    
-    if not os.path.exists(html_path):
-        return 'File not found', 404
-    
-    try:
-        with open(html_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Escape content for srcdoc attribute
-        escaped = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
-        sandboxed = f'''<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8">
-<style>
-  body {{ margin: 0; padding: 10px; background: #1a1a2e; min-height: 100vh; box-sizing: border-box; }}
-  iframe {{ width: 100%; height: 600px; border: 1px solid #333; border-radius: 8px; background: #fff; }}
-</style>
-</head><body>
-<iframe srcdoc="{escaped}" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe>
-</body></html>'''
-        return sandboxed
-    except Exception as e:
-        return f'Error: {e}', 500
-
-
-@app.route('/api/preview/serve', methods=['GET'])
-def api_preview_serve():
-    """Serve an HTML file from any path as sandboxed iframe content."""
-    html_path = request.args.get('path', '')
-    
-    if not html_path or not os.path.exists(html_path):
-        return 'File not found', 404
-    
-    try:
-        with open(html_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        escaped = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
-        sandboxed = f'''<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8">
-<style>
-  body {{ margin: 0; padding: 10px; background: #1a1a2e; min-height: 100vh; box-sizing: border-box; }}
-  iframe {{ width: 100%; height: 600px; border: 1px solid #333; border-radius: 8px; background: #fff; }}
-</style>
-</head><body>
-<iframe srcdoc="{escaped}" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe>
-</body></html>'''
-        return sandboxed
-    except Exception as e:
-        return f'Error: {e}', 500
 
 
 @app.route('/api/save-code', methods=['POST'])

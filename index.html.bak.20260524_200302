@@ -6,7 +6,6 @@
     <title>Ollama-Agent</title>
     <!-- Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.5/dist/purify.min.js"></script>
     <!-- Code highlighting -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/atom-one-dark.min.css">
     <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
@@ -193,45 +192,41 @@
         }
 
         .header {
-            padding: 10px 20px;
+            padding: 15px 25px;
             background: var(--bg-secondary);
             border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 20px;
             transition: background 0.3s, border-color 0.3s;
-            flex-wrap: wrap;
         }
 
         .header-left {
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 20px;
             flex: 1;
-            flex-wrap: wrap;
         }
 
         .model-selector {
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 10px;
         }
 
         .model-selector label {
-            font-size: 0.85rem;
+            font-size: 0.9rem;
             color: var(--text-secondary);
-            white-space: nowrap;
         }
 
         .model-selector select {
             background: var(--bg-tertiary);
             color: var(--text-primary);
             border: 1px solid var(--accent);
-            padding: 6px 10px;
+            padding: 8px 15px;
             border-radius: 6px;
-            font-size: 0.85rem;
+            font-size: 0.9rem;
             cursor: pointer;
-            max-width: 200px;
         }
 
         .model-selector select option {
@@ -290,25 +285,14 @@
             padding: 3px 8px;
             border-radius: 10px;
             border: 1px solid var(--border);
-            display: inline-block;
+            display: none;
         }
 
         .model-info-badge.loaded {
+            display: inline-block;
             background: rgba(74, 222, 128, 0.15);
             color: #4ade80;
             border-color: #4ade80;
-        }
-
-        .model-info-badge.local {
-            background: rgba(34, 197, 94, 0.15);
-            color: #22c55e;
-            border-color: #22c55e;
-        }
-
-        .model-info-badge.cloud {
-            background: rgba(59, 130, 246, 0.15);
-            color: #3b82f6;
-            border-color: #3b82f6;
         }
 
         .settings-btn {
@@ -412,10 +396,6 @@
             transition: background 0.3s;
             overflow-wrap: break-word;
             word-break: break-word;
-            overflow-x: hidden;
-            overflow-y: auto;
-            max-height: 85vh;
-            position: relative;
         }
 
         .message.user .message-content {
@@ -452,7 +432,7 @@
         .message-content blockquote {
             border-left: 3px solid var(--accent);
             padding-left: 12px;
-            margin: 15px 0;
+            margin: 10px 0;
             color: var(--text-secondary);
             font-style: italic;
         }
@@ -462,27 +442,10 @@
             padding: 15px;
             border-radius: 8px;
             overflow-x: auto;
-            overflow-y: auto;
-            max-height: 400px;
-            margin: 15px 0;
+            margin: 10px 0;
             font-family: 'Courier New', monospace;
             font-size: 0.85rem;
             position: relative;
-            border: 1px solid var(--border);
-        }
-
-        .message-content pre::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-        .message-content pre::-webkit-scrollbar-track {
-            background: var(--bg-tertiary);
-            border-radius: 4px;
-        }
-        .message-content pre::-webkit-scrollbar-thumb {
-            background: var(--accent);
-            border-radius: 4px;
-            opacity: 0.7;
         }
 
         .message-content pre code {
@@ -500,39 +463,20 @@
         }
 
         .message-content table {
-            display: block;
-            overflow-x: auto;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-            border-radius: 8px;
-            border: 1px solid var(--border);
             border-collapse: collapse;
-            margin: 15px 0;
+            margin: 10px 0;
             width: 100%;
         }
 
         .message-content th, .message-content td {
             border: 1px solid var(--border);
-            padding: 10px 15px;
+            padding: 8px 12px;
             text-align: left;
         }
 
         .message-content th {
-            color: var(--accent);
-            border-bottom: 2px solid var(--accent);
             background: var(--bg-tertiary);
             font-weight: bold;
-        }
-
-        .message-content tr:nth-child(even) {
-            background-color: rgba(255, 255, 255, 0.05);
-        }
-
-        .message-content tr:hover {
-            background-color: rgba(233, 69, 96, 0.1);
-        }
-
-        .message-content td {
-            white-space: pre-wrap;
         }
 
         .message-content a {
@@ -866,25 +810,21 @@
         <div class="header">
             <div class="header-left">
                 <div class="model-selector">
-                    <label>Basic:</label>
+                    <label>Chat:</label>
                     <select id="baseModelSelect">
                         <option value="">Auto</option>
-                        {% for model in local_models %}
+                        {% for model in models %}
                         <option value="{{ model }}" {% if model == 'gemma4:e4b' %}selected{% endif %}>{{ model }}</option>
                         {% endfor %}
                     </select>
-                    <input type="checkbox" id="forceBasic" title="Force Basic model only (no escalation)" style="cursor:pointer;">
-                    <label for="forceBasic" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Basic model, never escalate to Agent">Force</label>
                 </div>
                 <div class="model-selector">
-                    <label>Advanced:</label>
+                    <label>Agent:</label>
                     <select id="modelSelect">
-                        {% for model in cloud_models %}
+                        {% for model in models %}
                         <option value="{{ model }}" {% if model == current_model %}selected{% endif %}>{{ model }}</option>
                         {% endfor %}
                     </select>
-                    <input type="checkbox" id="forceAdvanced" title="Force Advanced model with tools" style="cursor:pointer;">
-                    <label for="forceAdvanced" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Advanced model with tools">Force</label>
                 </div>
                 <div class="model-selector">
                     <label>Backup:</label>
@@ -895,6 +835,10 @@
                         {% endfor %}
                     </select>
                 </div>
+                <div class="model-selector" style="flex-direction:row;align-items:center;gap:4px;">
+                    <input type="checkbox" id="forceAdvanced" title="Force Agent model with tools" style="cursor:pointer;">
+                    <label for="forceAdvanced" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Agent model with tools">Force</label>
+                </div>
                 <div class="context-indicator" id="contextIndicator">
                     <div class="context-bar-bg"><div class="context-bar-fill" id="contextBar" style="width: 0%"></div></div>
                     <span id="contextText">0%</span>
@@ -904,12 +848,6 @@
             <button class="settings-btn" onclick="showDisclaimerModal()" title="Disclaimer" style="font-size: 1.2rem;">⚠️</button>
             <button class="donate-btn" onclick="showDonateModal()" title="Donate">💜</button>
             <button class="settings-btn" onclick="openSettings()" title="Settings">⚙️</button>
-        </div>
-
-        <!-- Banner for no local models -->
-        <div id="noLocalModelBanner" style="display:none;background:#f59e0b;color:#000;padding:10px 16px;text-align:center;font-size:0.9rem;font-weight:600;">
-            ⚠️ No local models found. Basic model needs a local model. <button id="pullModelBtn" onclick="pullBaseModel()" style="margin-left:10px;padding:4px 12px;background:#000;color:#fff;border:none;border-radius:4px;cursor:pointer;">Download llama3.2:1b (1.3GB)</button>
-            <span id="pullProgress" style="margin-left:10px;font-size:0.8rem;color:#555;"></span>
         </div>
 
         <div class="chat-area" id="chatArea">
@@ -1026,7 +964,6 @@
         let currentSessionId = '{{ session.get("chat_id", "") }}';
         let isWaiting = false;
         let currentEventSource = null;
-        let currentAbortController = null;
         let maxContextTokens = 4096;
 
         const chatArea = document.getElementById('chatArea');
@@ -1061,75 +998,33 @@
         function renderMarkdown(text) {
             if (typeof marked !== 'undefined') {
                 try {
-                    let html = marked.parse(text);
-                    // Sanitize HTML to prevent XSS
-                    if (typeof DOMPurify !== 'undefined') {
-                        html = DOMPurify.sanitize(html, {
-                            ALLOWED_TAGS: ['h1','h2','h3','h4','h5','h6','p','br','hr','ul','ol','li','a','strong','em','b','i','u','s','code','pre','blockquote','table','thead','tbody','tr','th','td','img','div','span','details','summary','sup','sub','dl','dt','dd'],
-                            ALLOWED_ATTR: ['href','src','alt','title','class','id','target','rel','colspan','rowspan','style']
-                        });
-                    }
-                    return html;
+                    return marked.parse(text);
                 } catch (e) {
                     // Fallback to basic rendering
                 }
             }
             // Fallback: basic formatting
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+            return text
+                .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                .replace(/\n/g, '<br>');
         }
 
         // Add copy buttons to code blocks after rendering
         function addCopyButtons(container) {
-            // Use rAF to ensure layout is complete before measuring scrollHeight
-            requestAnimationFrame(() => {
-                container.querySelectorAll('pre').forEach(pre => {
-                    if (pre.querySelector('.copy-btn')) return;
-                    const btn = document.createElement('button');
-                    btn.className = 'copy-btn';
-                    btn.textContent = 'Copy';
-                    btn.onclick = () => {
-                        const code = pre.querySelector('code');
-                        navigator.clipboard.writeText(code ? code.textContent : pre.textContent);
-                        btn.textContent = 'Copied!';
-                        setTimeout(() => btn.textContent = 'Copy', 2000);
-                    };
-                    pre.style.position = 'relative';
-                    pre.appendChild(btn);
-
-                    // Add collapse toggle for long code blocks
-                    // Use a small delay to ensure scrollHeight is accurate
-                    setTimeout(() => {
-                        const height = pre.scrollHeight;
-                        if (height > 250) {
-                            const toggle = document.createElement('button');
-                            toggle.className = 'copy-btn';
-                            toggle.textContent = '▽ Show more';
-                            toggle.style.right = '70px';
-                            toggle.style.fontSize = '0.75rem';
-                            toggle.style.opacity = '0.9';
-                            toggle.style.background = 'var(--accent)';
-                            toggle.style.color = '#fff';
-                            toggle.onclick = () => {
-                                if (pre.dataset.expanded === 'true') {
-                                    pre.style.maxHeight = '200px';
-                                    pre.dataset.expanded = 'false';
-                                    toggle.textContent = '▽ Show more';
-                                    pre.scrollTop = 0;
-                                } else {
-                                    pre.style.maxHeight = 'none';
-                                    pre.dataset.expanded = 'true';
-                                    toggle.textContent = '△ Show less';
-                                }
-                            };
-                            // Start collapsed
-                            pre.style.maxHeight = '200px';
-                            pre.dataset.expanded = 'false';
-                            pre.appendChild(toggle);
-                        }
-                    }, 100);
-                });
+            container.querySelectorAll('pre').forEach(pre => {
+                if (pre.querySelector('.copy-btn')) return;
+                const btn = document.createElement('button');
+                btn.className = 'copy-btn';
+                btn.textContent = 'Copy';
+                btn.onclick = () => {
+                    const code = pre.querySelector('code');
+                    navigator.clipboard.writeText(code ? code.textContent : pre.textContent);
+                    btn.textContent = 'Copied!';
+                    setTimeout(() => btn.textContent = 'Copy', 2000);
+                };
+                pre.style.position = 'relative';
+                pre.appendChild(btn);
             });
         }
 
@@ -1153,84 +1048,6 @@
             baseModelSelect.addEventListener('change', function() {
                 localStorage.setItem('ollama-agent-base-model', this.value);
             });
-        }
-
-        // Check if there are local models, show banner if not
-        async function checkLocalModels() {
-            try {
-                const resp = await fetch('/api/models/local');
-                const localModels = await resp.json();
-                const banner = document.getElementById('noLocalModelBanner');
-                if (localModels.length === 0 && banner) {
-                    banner.style.display = 'block';
-                }
-            } catch (e) {
-                console.warn('Could not check local models:', e);
-            }
-        }
-        checkLocalModels();
-
-        // Pull a base model with progress
-        async function pullBaseModel() {
-            const btn = document.getElementById('pullModelBtn');
-            const progress = document.getElementById('pullProgress');
-            const model = 'llama3.2:1b';
-
-            btn.disabled = true;
-            btn.textContent = 'Downloading...';
-            progress.textContent = 'Starting download...';
-
-            try {
-                const resp = await fetch('/api/models/download', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: model })
-                });
-
-                const reader = resp.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop() || '';
-
-                    for (const line of lines) {
-                        if (!line.startsWith('data: ')) continue;
-                        try {
-                            const data = JSON.parse(line.slice(6));
-                            if (data.type === 'progress') {
-                                if (data.percent !== undefined) {
-                                    progress.textContent = `Downloading ${model}: ${data.percent}%`;
-                                } else if (data.status === 'success') {
-                                    progress.textContent = `✅ ${model} downloaded successfully!`;
-                                } else {
-                                    progress.textContent = `${data.status}...`;
-                                }
-                            } else if (data.type === 'done') {
-                                progress.textContent = `✅ ${model} ready!`;
-                            } else if (data.type === 'error') {
-                                progress.textContent = `❌ Error: ${data.error}`;
-                                btn.disabled = false;
-                                btn.textContent = `Retry download`;
-                            }
-                        } catch (e) {}
-                    }
-                }
-
-                // Refresh model lists after download
-                if (progress.textContent.includes('✅')) {
-                    setTimeout(() => location.reload(), 1500);
-                }
-            } catch (e) {
-                progress.textContent = '❌ Download failed: ' + e.message;
-                btn.disabled = false;
-                btn.textContent = 'Retry download';
-            }
         }
 
         // Update context indicator with visual bar
@@ -1649,12 +1466,6 @@
 
         // Stop generation
         function stopGeneration() {
-            // Abort streaming fetch if active
-            if (currentAbortController) {
-                currentAbortController.abort();
-                currentAbortController = null;
-            }
-            // Close legacy EventSource if active
             if (currentEventSource) {
                 currentEventSource.close();
                 currentEventSource = null;
@@ -1687,7 +1498,7 @@
 
             // Show stop button, hide send button
             sendBtn.style.display = 'none';
-            stopBtn.style.display = 'flex';
+            stopBtn.style.display = '';
 
             // Add placeholder assistant message for streaming
             const welcome = chatArea.querySelector('.welcome-message');
@@ -1722,11 +1533,8 @@
             const contentEl = document.querySelector('#streaming-message .message-content');
             let fullResponse = '';
 
-            // Create AbortController for this request
-            currentAbortController = new AbortController();
-
             try {
-                // No timeout - wait for Ollama as long as it takes, but allow abort
+                // No timeout - wait for Ollama as long as it takes
                 const response = await fetch('/api/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1735,10 +1543,8 @@
                         model: modelSelect.value,
                         fallback_model: fallbackModelSelect.value,
                         base_model: baseModelSelect ? baseModelSelect.value : '',
-                        force_advanced: document.getElementById('forceAdvanced') ? document.getElementById('forceAdvanced').checked : false,
-                        force_basic: document.getElementById('forceBasic') ? document.getElementById('forceBasic').checked : false
-                    }),
-                    signal: currentAbortController.signal
+                        force_advanced: document.getElementById('forceAdvanced') ? document.getElementById('forceAdvanced').checked : false
+                    })
                 });
 
                 if (!response.ok) {
@@ -1772,19 +1578,6 @@
                                     addCopyButtons(contentEl);
                                     chatArea.scrollTop = chatArea.scrollHeight;
                                 }
-                            } else if (data.type === 'model_routing') {
-                                // Show routing badge immediately when model starts responding
-                                if (data.route) {
-                                    const routeText = (data.route === 'basic' ? '💬 Basic: ' : data.route === 'fallback' ? '↩ Fallback: ' : '🤖 Advanced: ') + (data.model || '');
-                                    const routeMsg = document.createElement('div');
-                                    routeMsg.style.cssText = 'margin-bottom:6px;padding:4px 8px;background:rgba(59,130,246,0.15);border:1px solid rgba(59,130,246,0.3);border-radius:4px;font-size:0.75rem;color:#60a5fa;display:inline-block;';
-                                    routeMsg.textContent = routeText;
-                                    const lastMsg = chatArea.querySelector('.message:last-child .message-content');
-                                    if (lastMsg && !lastMsg.querySelector('.model-routing-badge')) {
-                                        routeMsg.className = 'model-routing-badge';
-                                        lastMsg.parentNode.insertBefore(routeMsg, lastMsg);
-                                    }
-                                }
                             } else if (data.type === 'write_executed') {
                                 // Show notification of write commands executed
                                 const lastMsg = chatArea.querySelector('.message:last-child .message-content');
@@ -1793,16 +1586,6 @@
                                     notif.style.cssText = 'margin-top:8px;padding:8px 12px;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.3);border-radius:6px;font-size:0.85rem;color:#22c55e;';
                                     notif.innerHTML = '📝 <strong>Escritura ejecutada:</strong> ' + data.commands.map(c => '<code>' + c.replace(/</g,'&lt;') + '</code>').join(', ');
                                     lastMsg.appendChild(notif);
-                                }
-                            } else if (data.type === 'html_preview') {
-                                // Model wrote an HTML file - show it in an iframe inside the chat
-                                const lastMsg = chatArea.querySelector('.message:last-child .message-content');
-                                if (lastMsg && data.path) {
-                                    var previewUrl = '/api/preview/serve?path=' + encodeURIComponent(data.path);
-                                    var previewDiv = document.createElement('div');
-                                    previewDiv.style.cssText = 'margin-top:10px;border-radius:8px;overflow:hidden;border:1px solid var(--border);';
-                                    previewDiv.innerHTML = '<div style="padding:6px 10px;background:rgba(59,130,246,0.15);border-bottom:1px solid var(--border);font-size:0.75rem;color:#60a5fa;">🌐 Preview: <a href="' + data.path + '" target="_blank" style="color:#60a5fa;">' + data.path + '</a> <button onclick="this.parentElement.nextElementSibling.style.display=this.parentElement.nextElementSibling.style.display\'none\'\'\'block\';var b=this;if(this.textContent===\'Hide\'){this.textContent=\'Show\';}else{this.textContent=\'Hide\';}" style="float:right;background:rgba(59,130,246,0.2);border:1px solid rgba(59,130,246,0.4);border-radius:4px;padding:2px 8px;color:#60a5fa;cursor:pointer;font-size:0.7rem;">Hide</button></div><iframe src="' + previewUrl + '" style="width:100%;height:350px;border:none;background:#fff;display:block;" loading="lazy"></iframe>';
-                                    lastMsg.appendChild(previewDiv);
                                 }
                             } else if (data.type === 'write_permission_required') {
                                 // Show write permission modal
@@ -1855,20 +1638,14 @@
                                         lastMsg.appendChild(ts);
                                     }
                                 }
-                                // Show which model responded (always visible, color-coded)
+                                // Show which model responded
                                 if (data.used_model) {
                                     const lastMsg = chatArea.querySelector('.message:last-child .message-content');
-                                    if (lastMsg && !lastMsg.querySelector('.used-model-badge')) {
-                                        const isCloud = data.used_model.includes(':cloud') || data.used_model.includes('-cloud');
-                                        const isBase = data.is_local === true;
-                                        const color = isBase ? '#22c55e' : '#3b82f6';
-                                        const bg = isBase ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)';
-                                        const border = isBase ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.3)';
-                                        const icon = isBase ? '💬' : '🤖';
+                                    if (lastMsg) {
                                         const modelBadge = document.createElement('div');
-                                        modelBadge.className = 'used-model-badge';
-                                        modelBadge.style.cssText = 'margin-top:4px;padding:2px 8px;background:' + bg + ';border:1px solid ' + border + ';border-radius:4px;font-size:0.7rem;color:' + color + ';display:inline-block;';
-                                        modelBadge.textContent = icon + ' ' + data.used_model;
+                                        const isBase = data.used_model === (baseModelSelect ? baseModelSelect.value : '');
+                                        modelBadge.style.cssText = 'margin-top:4px;padding:2px 8px;background:' + (isBase ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)') + ';border:1px solid ' + (isBase ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.3)') + ';border-radius:4px;font-size:0.7rem;color:' + (isBase ? '#22c55e' : '#3b82f6') + ';display:inline-block;';
+                                        modelBadge.textContent = (isBase ? '💬' : '🤖') + ' ' + data.used_model;
                                         lastMsg.appendChild(modelBadge);
                                     }
                                 }
@@ -1881,20 +1658,13 @@
                     }
                 }
             } catch (e) {
-                if (e.name === 'AbortError') {
-                    // User cancelled - add partial response if any
-                    fullResponse += '\n\n*[Generation stopped]*';
-                } else {
-                    const errMsg = e.message || 'Connection error. Please try again.';
-                    if (!fullResponse) {
-                        if (contentEl) {
-                            contentEl.innerHTML = renderMarkdown(`**Error:** ${errMsg}`);
-                            addCopyButtons(contentEl);
-                        }
+                const errMsg = e.message || 'Connection error. Please try again.';
+                if (!fullResponse) {
+                    if (contentEl) {
+                        contentEl.innerHTML = renderMarkdown(`**Error:** ${errMsg}`);
+                        addCopyButtons(contentEl);
                     }
                 }
-            } finally {
-                currentAbortController = null;
             }
 
             // Remove streaming cursor
@@ -1931,8 +1701,7 @@
                         model: modelSelect.value,
                         fallback_model: fallbackModelSelect.value,
                         base_model: baseModelSelect ? baseModelSelect.value : '',
-                        force_advanced: document.getElementById('forceAdvanced') ? document.getElementById('forceAdvanced').checked : false,
-                        force_basic: document.getElementById('forceBasic') ? document.getElementById('forceBasic').checked : false
+                        force_advanced: document.getElementById('forceAdvanced') ? document.getElementById('forceAdvanced').checked : false
                     })
                 });
 
@@ -1987,46 +1756,6 @@
             addCopyButtons(messageDiv.querySelector('.message-content'));
             chatArea.scrollTop = chatArea.scrollHeight;
         }
-
-        // Mutual exclusion between Force Advanced and Force Basic
-        const forceAdvCb = document.getElementById('forceAdvanced');
-        const forceBasicCb = document.getElementById('forceBasic');
-        if (forceAdvCb && forceBasicCb) {
-            forceAdvCb.addEventListener('change', function() {
-                if (this.checked) forceBasicCb.checked = false;
-            });
-            forceBasicCb.addEventListener('change', function() {
-                if (this.checked) forceAdvCb.checked = false;
-            });
-        }
     </script>
-
-    <!-- Emergency collapse button -->
-    <button id="emergencyCloseBtn" onclick="emergencyCollapse()" style="position:fixed;top:8px;right:8px;z-index:2147483647;background:#e74c3c;color:#fff;border:none;border-radius:6px;padding:8px 14px;font-size:0.9rem;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.4);font-weight:bold;">✕ COLLAPSE CODE</button>
-
-    <script>
-        function emergencyCollapse() {
-            var msgs = document.querySelectorAll('.message-content');
-            var n = 0;
-            for (var i = 0; i < msgs.length; i++) {
-                if (msgs[i].innerHTML.length > 500) {
-                    msgs[i].style.maxHeight = '150px';
-                    msgs[i].style.overflowY = 'auto';
-                    msgs[i].style.border = '2px solid #e74c3c';
-                    n++;
-                }
-            }
-            alert('Collapsed ' + n + ' large message(s) to 150px. Scroll to see content.');
-        }
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') emergencyCollapse();
-        });
-    </script>
-
-    <!-- Version badge -->
-    <div style="position:fixed;bottom:4px;right:8px;font-size:0.65rem;color:var(--text-secondary);opacity:0.5;z-index:10;pointer-events:none;">
-        v{{ version }}
-    </div>
-
 </body>
 </html>
