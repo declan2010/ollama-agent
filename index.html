@@ -2011,38 +2011,6 @@
         }
     </script>
 
-    <!-- Emergency collapse button -->
-    <button id="emergencyCloseBtn" onclick="emergencyCollapse()" title="Collapse large code blocks" style="position:fixed;bottom:60px;right:8px;z-index:2147483647;background:#e74c3c;color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:1.1rem;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.4);font-weight:bold;display:flex;align-items:center;justify-content:center;">✕</button>
-
-    <script>
-        function emergencyCollapse() {
-            var pres = document.querySelectorAll('.message-content pre');
-            var count = 0;
-            for (var i = 0; i < pres.length; i++) {
-                if (pres[i].scrollHeight > 150) {
-                    pres[i].style.maxHeight = '80px';
-                    pres[i].style.overflow = 'auto';
-                    pres[i].style.display = 'block';
-                    count++;
-                }
-            }
-            // Also collapse any large divs inside message-content (like iframes, raw HTML)
-            var msgs = document.querySelectorAll('.message-content');
-            for (var j = 0; j < msgs.length; j++) {
-                if (msgs[j].innerHTML.length > 500 && !msgs[j].querySelector('pre')) {
-                    msgs[j].style.maxHeight = '150px';
-                    msgs[j].style.overflowY = 'auto';
-                    msgs[j].style.border = '2px solid #e74c3c';
-                    count++;
-                }
-            }
-            alert('Collapsed ' + count + ' block(s). Scroll to see content.');
-        }
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') emergencyCollapse();
-        });
-    </script>
-
     <!-- Version badge -->
     <div style="position:fixed;bottom:4px;right:8px;font-size:0.65rem;color:var(--text-secondary);opacity:0.5;z-index:10;pointer-events:none;">
         v{{ version }}
