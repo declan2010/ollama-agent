@@ -1307,7 +1307,7 @@ def api_chat_stream():
                                                 if is_write_command(cmd):
                                                     # Auto-approve write command
                                                     logger.info("Auto-approving follow-up write: %s", cmd)
-                                                    result = execute_write_command(cmd)
+                                                    result = execute_write_command(cmd, current_chat_id)
                                                 else:
                                                     result = execute_local_command(cmd)
                                                 followup_messages.append({'role': 'tool', 'content': result, 'tool_call_id': tc_id})
