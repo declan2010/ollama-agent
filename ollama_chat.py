@@ -388,6 +388,11 @@ def check_write_permission(cmd, session_id):
         _session_write_permissions[session_id] = 'none'
         return 'allowed'
     else:
+        # Auto-approve HTML files in /tmp and /home/cvc1 for previews (no popup needed)
+        cmd_lower = cmd.lower()
+        if any(ext in cmd_lower for ext in ['.html\u003c', '.htm\u003c', '.html ', '.htm ']) and \
+           any(loc in cmd_lower for loc in ['/tmp/', '/home/cvc1/', '/home/cvc/']):
+            return 'allowed'
         return 'ask'
 
 
