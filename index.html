@@ -290,14 +290,25 @@
             padding: 3px 8px;
             border-radius: 10px;
             border: 1px solid var(--border);
-            display: none;
+            display: inline-block;
         }
 
         .model-info-badge.loaded {
-            display: inline-block;
             background: rgba(74, 222, 128, 0.15);
             color: #4ade80;
             border-color: #4ade80;
+        }
+
+        .model-info-badge.local {
+            background: rgba(34, 197, 94, 0.15);
+            color: #22c55e;
+            border-color: #22c55e;
+        }
+
+        .model-info-badge.cloud {
+            background: rgba(59, 130, 246, 0.15);
+            color: #3b82f6;
+            border-color: #3b82f6;
         }
 
         .settings-btn {
@@ -401,8 +412,10 @@
             transition: background 0.3s;
             overflow-wrap: break-word;
             word-break: break-word;
-            max-height: 80vh;
+            overflow-x: hidden;
             overflow-y: auto;
+            max-height: 85vh;
+            position: relative;
         }
 
         .message.user .message-content {
@@ -1759,6 +1772,19 @@
                                     addCopyButtons(contentEl);
                                     chatArea.scrollTop = chatArea.scrollHeight;
                                 }
+                            } else if (data.type === 'model_routing') {
+                                // Show routing badge immediately when model starts responding
+                                if (data.route) {
+                                    const routeText = (data.route === 'basic' ? '💬 Basic: ' : data.route === 'fallback' ? '↩ Fallback: ' : '🤖 Advanced: ') + (data.model || '');
+                                    const routeMsg = document.createElement('div');
+                                    routeMsg.style.cssText = 'margin-bottom:6px;padding:4px 8px;background:rgba(59,130,246,0.15);border:1px solid rgba(59,130,246,0.3);border-radius:4px;font-size:0.75rem;color:#60a5fa;display:inline-block;';
+                                    routeMsg.textContent = routeText;
+                                    const lastMsg = chatArea.querySelector('.message:last-child .message-content');
+                                    if (lastMsg && !lastMsg.querySelector('.model-routing-badge')) {
+                                        routeMsg.className = 'model-routing-badge';
+                                        lastMsg.parentNode.insertBefore(routeMsg, lastMsg);
+                                    }
+                                }
                             } else if (data.type === 'write_executed') {
                                 // Show notification of write commands executed
                                 const lastMsg = chatArea.querySelector('.message:last-child .message-content');
@@ -1819,14 +1845,20 @@
                                         lastMsg.appendChild(ts);
                                     }
                                 }
-                                // Show which model responded
+                                // Show which model responded (always visible, color-coded)
                                 if (data.used_model) {
                                     const lastMsg = chatArea.querySelector('.message:last-child .message-content');
-                                    if (lastMsg) {
+                                    if (lastMsg && !lastMsg.querySelector('.used-model-badge')) {
+                                        const isCloud = data.used_model.includes(':cloud') || data.used_model.includes('-cloud');
+                                        const isBase = data.is_local === true;
+                                        const color = isBase ? '#22c55e' : '#3b82f6';
+                                        const bg = isBase ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)';
+                                        const border = isBase ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.3)';
+                                        const icon = isBase ? '💬' : '🤖';
                                         const modelBadge = document.createElement('div');
-                                        const isBase = data.used_model === (baseModelSelect ? baseModelSelect.value : '');
-                                        modelBadge.style.cssText = 'margin-top:4px;padding:2px 8px;background:' + (isBase ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)') + ';border:1px solid ' + (isBase ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.3)') + ';border-radius:4px;font-size:0.7rem;color:' + (isBase ? '#22c55e' : '#3b82f6') + ';display:inline-block;';
-                                        modelBadge.textContent = (isBase ? '💬' : '🤖') + ' ' + data.used_model;
+                                        modelBadge.className = 'used-model-badge';
+                                        modelBadge.style.cssText = 'margin-top:4px;padding:2px 8px;background:' + bg + ';border:1px solid ' + border + ';border-radius:4px;font-size:0.7rem;color:' + color + ';display:inline-block;';
+                                        modelBadge.textContent = icon + ' ' + data.used_model;
                                         lastMsg.appendChild(modelBadge);
                                     }
                                 }
@@ -1959,41 +1991,40 @@
         }
     </script>
 
-    <!-- Floating emergency close button for stuck messages -->
-    <button id="emergencyCloseBtn" onclick="closeLargeMessages()" title="Close large code blocks" style="display:none;position:fixed;top:10px;right:10px;z-index:9999;background:#e74c3c;color:#fff;border:none;border-radius:50%;width:36px;height:36px;font-size:1.2rem;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3);">✕</button>
+    <!-- Emergency collapse button -->
+    <button id="emergencyCloseBtn" onclick="emergencyCollapse()" style="position:fixed;top:8px;right:8px;z-index:2147483647;background:#e74c3c;color:#fff;border:none;border-radius:6px;padding:8px 14px;font-size:0.9rem;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.4);font-weight:bold;">✕ COLLAPSE CODE</button>
 
     <script>
-        // Show emergency button when there are large code blocks
-        function updateEmergencyButton() {
-            const btn = document.getElementById('emergencyCloseBtn');
-            const largePre = document.querySelectorAll('.message-content pre');
-            let hasLarge = false;
-            largePre.forEach(pre => {
-                if (pre.scrollHeight > 300) hasLarge = true;
-            });
-            if (btn) btn.style.display = hasLarge ? 'block' : 'none';
-        }
-
-        // Close/collapse all large code blocks
-        function closeLargeMessages() {
-            document.querySelectorAll('.message-content pre').forEach(pre => {
-                if (pre.scrollHeight > 300) {
-                    pre.style.maxHeight = '150px';
-                    pre.dataset.expanded = 'false';
-                    const toggle = pre.querySelector('.copy-btn + .copy-btn') || pre.querySelector('[style*="right: 70px"]');
-                    if (toggle) toggle.textContent = '▽ Show more';
+        function emergencyCollapse() {
+            var pres = document.querySelectorAll('.message-content pre');
+            var count = 0;
+            for (var i = 0; i < pres.length; i++) {
+                pres[i].style.maxHeight = '80px';
+                pres[i].style.overflowY = 'auto';
+                pres[i].style.display = 'block';
+                count++;
+            }
+            // Also handle any large divs (raw HTML output)
+            var divs = document.querySelectorAll('.message-content > div');
+            for (var j = 0; j < divs.length; j++) {
+                var innerLen = divs[j].innerHTML.length;
+                if (innerLen > 20000) {
+                    var childs = divs[j].children;
+                    for (var k = 0; k < childs.length; k++) {
+                        if (childs[k].tagName !== 'DIV' || childs[k].className === 'used-model-badge' || childs[k].className === 'model-routing-badge') continue;
+                        childs[k].style.maxHeight = '80px';
+                        childs[k].style.overflowY = 'auto';
+                        count++;
+                    }
                 }
-            });
+            }
+            alert('Collapsed ' + count + ' block(s). Use ESC anytime to re-collapse.');
         }
-
-        // Check periodically for large blocks
-        setInterval(updateEmergencyButton, 2000);
-        // Initial check after page load
-        setTimeout(updateEmergencyButton, 1000);
-
-        // ESC key collapses large code blocks
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') closeLargeMessages();
+            if (e.key === 'Escape') emergencyCollapse();
+        });
+        window.addEventListener('DOMContentLoaded', function() {
+            setTimeout(emergencyCollapse, 600);
         });
     </script>
 
