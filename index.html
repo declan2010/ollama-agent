@@ -1959,6 +1959,44 @@
         }
     </script>
 
+    <!-- Floating emergency close button for stuck messages -->
+    <button id="emergencyCloseBtn" onclick="closeLargeMessages()" title="Close large code blocks" style="display:none;position:fixed;top:10px;right:10px;z-index:9999;background:#e74c3c;color:#fff;border:none;border-radius:50%;width:36px;height:36px;font-size:1.2rem;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3);">✕</button>
+
+    <script>
+        // Show emergency button when there are large code blocks
+        function updateEmergencyButton() {
+            const btn = document.getElementById('emergencyCloseBtn');
+            const largePre = document.querySelectorAll('.message-content pre');
+            let hasLarge = false;
+            largePre.forEach(pre => {
+                if (pre.scrollHeight > 300) hasLarge = true;
+            });
+            if (btn) btn.style.display = hasLarge ? 'block' : 'none';
+        }
+
+        // Close/collapse all large code blocks
+        function closeLargeMessages() {
+            document.querySelectorAll('.message-content pre').forEach(pre => {
+                if (pre.scrollHeight > 300) {
+                    pre.style.maxHeight = '150px';
+                    pre.dataset.expanded = 'false';
+                    const toggle = pre.querySelector('.copy-btn + .copy-btn') || pre.querySelector('[style*="right: 70px"]');
+                    if (toggle) toggle.textContent = '▽ Show more';
+                }
+            });
+        }
+
+        // Check periodically for large blocks
+        setInterval(updateEmergencyButton, 2000);
+        // Initial check after page load
+        setTimeout(updateEmergencyButton, 1000);
+
+        // ESC key collapses large code blocks
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') closeLargeMessages();
+        });
+    </script>
+
     <!-- Version badge -->
     <div style="position:fixed;bottom:4px;right:8px;font-size:0.65rem;color:var(--text-secondary);opacity:0.5;z-index:10;pointer-events:none;">
         v{{ version }}
