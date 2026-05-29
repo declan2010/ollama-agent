@@ -982,6 +982,21 @@ def api_models_download():
     return Response(generate(), mimetype='text/event-stream')
 
 
+def get_model_size_from_ps(model_name):
+    """Get the actual file size of a loaded model from /api/ps"""
+    try:
+        import urllib.request
+        req = urllib.request.Request(f'{OLLAMA_BASE_URL}/api/ps')
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            ps_data = json.loads(resp.read())
+            for m in ps_data.get('models', []):
+                if model_name == m.get('name', '') or model_name + ':latest' == m.get('name', ''):
+                    return m.get('size', 0)
+    except Exception:
+        pass
+    return 0
+
+
 @app.route('/api/model-info')
 def api_model_info():
     """API to get model info including context window and size"""
@@ -1410,10 +1425,10 @@ def api_chat_stream():
 
                 elapsed = round(time.time() - start_time, 2)
                 is_local = (used_model == base_model)
-                # Get parameter size and file size for the used model
+                # Get parameter size from model info, but file size from /api/ps (more accurate)
                 used_model_info = get_model_info(used_model)
                 used_param_size = used_model_info.get('parameter_size', '')
-                used_size = used_model_info.get('size', 0)
+                used_size = get_model_size_from_ps(used_model)  # Get actual file size from /api/ps
                 yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'eval_count': base_eval_count, 'elapsed': elapsed, 'used_model': used_model, 'is_local': is_local, 'parameter_size': used_param_size, 'size': used_size})}\n\n"
                 return
 
@@ -1919,7 +1934,7 @@ def api_chat_stream():
             # Get parameter size and file size for the used model
             used_model_info = get_model_info(used_model)
             used_param_size = used_model_info.get('parameter_size', '')
-            used_size = used_model_info.get('size', 0)
+            used_size = get_model_size_from_ps(used_model)  # Get actual file size from /api/ps
             yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model, 'is_local': used_model == base_model, 'parameter_size': used_param_size, 'size': used_size})}\n\n"
             # Save what we have
             if full_response:
@@ -1962,7 +1977,7 @@ def api_chat_stream():
         # Get parameter size and file size for the used model
         used_model_info = get_model_info(used_model)
         used_param_size = used_model_info.get('parameter_size', '')
-        used_size = used_model_info.get('size', 0)
+        used_size = get_model_size_from_ps(used_model)  # Get actual file size from /api/ps
         yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'eval_count': eval_count, 'elapsed': elapsed, 'used_model': used_model, 'is_local': is_local, 'parameter_size': used_param_size, 'size': used_size})}\n\n"
 
     return Response(generate(), mimetype='text/event-stream',

@@ -1988,8 +1988,6 @@
                                 if (data.used_model) {
                                     window.lastUsedModel = data.used_model;
                                     window.lastUsedIsLocal = data.is_local;
-                                    // DEBUG: show what we received
-                                    alert('DEBUG: used_model=' + data.used_model + ' size=' + data.size + ' param=' + data.parameter_size);
                                     updateBadgeForUsedModel(data.used_model, data.is_local, data.parameter_size || '', data.size || 0);
                                 }
                                 // Show which model responded (always visible, color-coded)
