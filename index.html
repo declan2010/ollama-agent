@@ -1272,21 +1272,9 @@
             try {
                 const response = await fetch(`/api/model-info?model=${encodeURIComponent(modelSelect.value)}`);
                 const info = await response.json();
-                if (info.loaded === true) {
-                    badge.className = 'model-info-badge loaded';
-                    badge.textContent = '● Loaded';
-                } else if (info.loaded === false) {
-                    badge.className = 'model-info-badge';
-                    badge.textContent = '○ Unloaded';
-                    badge.style.display = 'inline-block';
-                } else {
-                    badge.style.display = 'none';
-                }
-
-                // Show model info badge based on model type and load status
-                const sizeBytes = info.size || 0;
-                const paramSize = info.details?.parameter_size || info.parameter_size || '';
                 const isCloud = modelSelect.value.includes(':cloud') || modelSelect.value.includes('-cloud');
+                const paramSize = info.details?.parameter_size || info.parameter_size || '';
+                const hasMessages = document.querySelectorAll('.message').length > 0;
                 
                 // Helper: format file size to human readable (base 1024)
                 function formatFileSize(bytes) {
@@ -1300,7 +1288,6 @@
                 // Helper: normalize parameter count to billions (B)
                 function formatParams(sizeStr) {
                     if (!sizeStr) return '';
-                    // If already has B/M/K/T suffix, normalize to B
                     return sizeStr
                         .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
                         .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
@@ -1308,20 +1295,29 @@
                         .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
                 }
                 
-                // Build badge text based on model type
+                // At startup (no messages yet), show unloaded for all models
+                if (!hasMessages) {
+                    badge.className = 'model-info-badge';
+                    badge.textContent = '○ Unloaded';
+                    if (paramSize && !/^\d{10,}$/.test(paramSize)) {
+                        badge.textContent += ` [${formatParams(paramSize)}]`;
+                    }
+                    badge.style.display = 'inline-block';
+                    return;
+                }
+                
+                // After messages exist, show actual status
                 if (info.loaded === true) {
                     if (isCloud) {
+                        badge.className = 'model-info-badge loaded';
                         badge.textContent = '● Cloud';
                     } else {
+                        badge.className = 'model-info-badge loaded';
                         badge.textContent = '● Loaded';
+                        if (info.size > 0) {
+                            badge.textContent += ` ${formatFileSize(info.size)}`;
+                        }
                     }
-                    
-                    // Add file size for local loaded models
-                    if (!isCloud && sizeBytes > 0) {
-                        badge.textContent += ` ${formatFileSize(sizeBytes)}`;
-                    }
-                    
-                    // Add parameter count if available (for all models)
                     if (paramSize && !/^\d{10,}$/.test(paramSize)) {
                         badge.textContent += ` [${formatParams(paramSize)}]`;
                     }
