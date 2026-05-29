@@ -841,6 +841,8 @@
                         <option value="{{ model }}" {% if model == 'gemma4:e4b' %}selected{% endif %}>{{ model }}</option>
                         {% endfor %}
                     </select>
+                    <input type="checkbox" id="forceBasic" title="Force Basic model only (no escalation)" style="cursor:pointer;">
+                    <label for="forceBasic" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Basic model, never escalate to Agent">Force</label>
                 </div>
                 <div class="model-selector">
                     <label>Agent:</label>
@@ -849,6 +851,8 @@
                         <option value="{{ model }}" {% if model == current_model %}selected{% endif %}>{{ model }}</option>
                         {% endfor %}
                     </select>
+                    <input type="checkbox" id="forceAdvanced" title="Force Agent model with tools" style="cursor:pointer;">
+                    <label for="forceAdvanced" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Agent model with tools">Force</label>
                 </div>
                 <div class="model-selector">
                     <label>Backup:</label>
@@ -858,14 +862,6 @@
                         <option value="{{ model }}">{{ model }}</option>
                         {% endfor %}
                     </select>
-                </div>
-                <div class="model-selector" style="flex-direction:row;align-items:center;gap:4px;">
-                    <input type="checkbox" id="forceAdvanced" title="Force Agent model with tools" style="cursor:pointer;">
-                    <label for="forceAdvanced" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Agent model with tools">Force</label>
-                </div>
-                <div class="model-selector" style="flex-direction:row;align-items:center;gap:4px;">
-                    <input type="checkbox" id="forceBasic" title="Force Basic model only (no escalation)" style="cursor:pointer;">
-                    <label for="forceBasic" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Basic model, never escalate to Agent">Force Basic</label>
                 </div>
                 <div class="context-indicator" id="contextIndicator">
                     <div class="context-bar-bg"><div class="context-bar-fill" id="contextBar" style="width: 0%"></div></div>
