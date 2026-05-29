@@ -1266,6 +1266,34 @@
             }
         }
 
+        // Update badge to reflect the actually used model (not the selected one)
+        function updateBadgeForUsedModel(usedModel, isLocal, paramSize) {
+            const badge = document.getElementById('modelInfoBadge');
+            if (!badge) return;
+            
+            function formatParams(sizeStr) {
+                if (!sizeStr) return '';
+                return sizeStr
+                    .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
+                    .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
+                    .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
+                    .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
+            }
+            
+            const isCloud = usedModel.includes(':cloud') || usedModel.includes('-cloud');
+            if (isCloud) {
+                badge.className = 'model-info-badge loaded';
+                badge.textContent = '● Cloud';
+            } else {
+                badge.className = 'model-info-badge loaded';
+                badge.textContent = '● Loaded';
+            }
+            if (paramSize && !/^\d{10,}$/.test(paramSize)) {
+                badge.textContent += ` [${formatParams(paramSize)}]`;
+            }
+            badge.style.display = 'inline-block';
+        }
+
         // Check model loaded status
         async function checkModelStatus() {
             const badge = document.getElementById('modelInfoBadge');
@@ -1275,6 +1303,12 @@
                 const isCloud = modelSelect.value.includes(':cloud') || modelSelect.value.includes('-cloud');
                 const paramSize = info.details?.parameter_size || info.parameter_size || '';
                 const hasMessages = document.querySelectorAll('.message').length > 0;
+                
+                // If we have a last used model from the done event, use that instead
+                if (window.lastUsedModel && hasMessages) {
+                    updateBadgeForUsedModel(window.lastUsedModel, window.lastUsedIsLocal, paramSize);
+                    return;
+                }
                 
                 // Helper: format file size to human readable (base 1024)
                 function formatFileSize(bytes) {
@@ -1945,30 +1979,9 @@
                                 }
                                 // Update badge based on actually used model (not selected model)
                                 if (data.used_model) {
-                                    const badge = document.getElementById('modelInfoBadge');
-                                    const isCloud = data.used_model.includes(':cloud') || data.used_model.includes('-cloud');
-                                    const paramSize = data.parameter_size || '';
-                                    
-                                    function formatParams(sizeStr) {
-                                        if (!sizeStr) return '';
-                                        return sizeStr
-                                            .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
-                                            .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
-                                            .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
-                                            .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
-                                    }
-                                    
-                                    if (isCloud) {
-                                        badge.className = 'model-info-badge loaded';
-                                        badge.textContent = '● Cloud';
-                                    } else {
-                                        badge.className = 'model-info-badge loaded';
-                                        badge.textContent = '● Loaded';
-                                    }
-                                    if (paramSize && !/^\d{10,}$/.test(paramSize)) {
-                                        badge.textContent += ` [${formatParams(paramSize)}]`;
-                                    }
-                                    badge.style.display = 'inline-block';
+                                    window.lastUsedModel = data.used_model;
+                                    window.lastUsedIsLocal = data.is_local;
+                                    updateBadgeForUsedModel(data.used_model, data.is_local, data.parameter_size || '');
                                 }
                                 // Show which model responded (always visible, color-coded)
                                 if (data.used_model) {
