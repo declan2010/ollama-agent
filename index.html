@@ -1535,44 +1535,34 @@
             var advancedContainer = document.getElementById('advancedModelContainer');
             var fallbackContainer = document.getElementById('fallbackModelContainer');
             
-            if (basicContainer) {
-                basicContainer.style.border = '';
-                basicContainer.style.borderRadius = '';
-                basicContainer.style.padding = '';
-                basicContainer.style.background = '';
-            }
-            if (advancedContainer) {
-                advancedContainer.style.border = '';
-                advancedContainer.style.borderRadius = '';
-                advancedContainer.style.padding = '';
-                advancedContainer.style.background = '';
-            }
-            if (fallbackContainer) {
-                fallbackContainer.style.border = '';
-                fallbackContainer.style.borderRadius = '';
-                fallbackContainer.style.padding = '';
-                fallbackContainer.style.background = '';
-            }
+            [basicContainer, advancedContainer, fallbackContainer].forEach(function(container) {
+                if (container) {
+                    container.style.cssText = '';
+                    var label = container.querySelector('label');
+                    if (label) label.style.color = '';
+                }
+            });
             
-            // Highlight the active one
+            // Highlight the active one by changing label color
             var target = null;
             var color = '';
             if (route === 'basic' || route === 'base_first') {
                 target = basicContainer;
-                color = 'rgba(34,197,94,0.4)'; // green
+                color = '#22c55e'; // green
             } else if (route === 'advanced' || route === 'advanced_direct' || route === 'escalated') {
                 target = advancedContainer;
-                color = 'rgba(59,130,246,0.4)'; // blue
+                color = '#3b82f6'; // blue
             } else if (route === 'fallback') {
                 target = fallbackContainer;
-                color = 'rgba(234,179,8,0.4)'; // amber
+                color = '#eab308'; // amber
             }
             
             if (target) {
-                target.style.border = '2px solid ' + color.replace('0.4', '0.8');
+                var label = target.querySelector('label');
+                if (label) label.style.color = color;
+                target.style.border = '2px solid ' + color;
                 target.style.borderRadius = '8px';
                 target.style.padding = '4px 8px';
-                target.style.background = color.replace('0.4', '0.1');
             }
         }
 
