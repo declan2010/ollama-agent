@@ -52,6 +52,7 @@ logging.basicConfig(
 logger = logging.getLogger('ollama-agent')
 
 app = Flask(__name__)
+app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.secret_key = os.environ.get('SECRET_KEY', 'ollama-webchat-secret-key-change-me')
 
 # --- Rate Limiting ---
