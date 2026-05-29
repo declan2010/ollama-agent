@@ -1271,14 +1271,9 @@
             const badge = document.getElementById('modelInfoBadge');
             if (!badge) return;
             
-            function formatParams(sizeStr) {
-                if (!sizeStr) return '';
-                return sizeStr
-                    .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
-                    .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
-                    .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
-                    .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
-            }
+            // Force convert to number
+            var sizeNum = parseInt(fileSize) || 0;
+            var pSize = paramSize || '';
             
             function formatFileSize(bytes) {
                 if (bytes >= 1099511627776) return (bytes / 1099511627776).toFixed(2) + 'TB';
@@ -1288,27 +1283,37 @@
                 return bytes + 'B';
             }
             
-            const isCloud = usedModel.includes(':cloud') || usedModel.includes('-cloud');
+            function formatParams(sizeStr) {
+                if (!sizeStr) return '';
+                return sizeStr
+                    .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
+                    .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
+                    .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
+                    .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
+            }
+            
+            var isCloud = usedModel.includes(':cloud') || usedModel.includes('-cloud');
+            var text = '';
+            
             if (isCloud) {
-                badge.className = 'model-info-badge loaded';
-                badge.textContent = '● Cloud';
-                // For cloud, show parameter size
-                if (paramSize && !/^\d{10,}$/.test(paramSize)) {
-                    badge.textContent += ` [${formatParams(paramSize)}]`;
+                text = '● Cloud';
+                if (pSize && !/^\d{10,}$/.test(pSize)) {
+                    text += ' [' + formatParams(pSize) + ']';
                 }
             } else {
-                badge.className = 'model-info-badge loaded';
-                badge.textContent = '● Loaded';
-                // For local, show file size
-                if (fileSize > 0) {
-                    badge.textContent += ` ${formatFileSize(fileSize)}`;
+                text = '● Loaded';
+                if (sizeNum > 0) {
+                    text += ' ' + formatFileSize(sizeNum);
                 }
-                // Also show parameter size if available
-                if (paramSize && !/^\d{10,}$/.test(paramSize)) {
-                    badge.textContent += ` [${formatParams(paramSize)}]`;
+                if (pSize && !/^\d{10,}$/.test(pSize)) {
+                    text += ' [' + formatParams(pSize) + ']';
                 }
             }
+            
+            badge.className = 'model-info-badge loaded';
+            badge.textContent = text;
             badge.style.display = 'inline-block';
+            badge.style.visibility = 'visible';
         }
 
         // Check model loaded status
