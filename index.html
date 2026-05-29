@@ -1820,18 +1820,8 @@
                                     chatArea.scrollTop = chatArea.scrollHeight;
                                 }
                             } else if (data.type === 'model_routing') {
-                                // Show routing badge immediately when model starts responding
+                                // Highlight the active model select in header (badge removed per request)
                                 if (data.route) {
-                                    const routeText = (data.route === 'basic' ? '💬 Basic: ' : data.route === 'fallback' ? '↩ Fallback: ' : '🤖 Advanced: ') + (data.model || '');
-                                    const routeMsg = document.createElement('div');
-                                    routeMsg.style.cssText = 'margin-bottom:6px;padding:4px 8px;background:rgba(59,130,246,0.15);border:1px solid rgba(59,130,246,0.3);border-radius:4px;font-size:0.75rem;color:#60a5fa;display:inline-block;';
-                                    routeMsg.textContent = routeText;
-                                    const lastMsg = chatArea.querySelector('.message:last-child .message-content');
-                                    if (lastMsg && !lastMsg.querySelector('.model-routing-badge')) {
-                                        routeMsg.className = 'model-routing-badge';
-                                        lastMsg.parentNode.insertBefore(routeMsg, lastMsg);
-                                    }
-                                    // Highlight the active model select in header
                                     highlightActiveModelSelect(data.route, data.model);
                                 }
                             } else if (data.type === 'write_executed') {
