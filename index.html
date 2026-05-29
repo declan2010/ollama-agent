@@ -1283,11 +1283,13 @@
                     badge.style.display = 'none';
                 }
 
-                // Show model size - use actual file size from Ollama /api/ps
+                // Show model info badge based on model type and load status
                 const sizeBytes = info.size || 0;
+                const paramSize = info.details?.parameter_size || info.parameter_size || '';
+                const isCloud = modelSelect.value.includes(':cloud') || modelSelect.value.includes('-cloud');
                 
-                // Helper: format bytes to human readable (base 1024)
-                function formatBytes(bytes) {
+                // Helper: format file size to human readable (base 1024)
+                function formatFileSize(bytes) {
                     if (bytes >= 1099511627776) return (bytes / 1099511627776).toFixed(2) + 'TB';
                     if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + 'GB';
                     if (bytes >= 1048576) return (bytes / 1048576).toFixed(0) + 'MB';
@@ -1295,20 +1297,43 @@
                     return bytes + 'B';
                 }
                 
-                // Only show size for loaded local models (cloud models don't have file size)
-                if (info.loaded === true && sizeBytes > 0) {
-                    badge.textContent += ` ${formatBytes(sizeBytes)}`;
-                } else if (info.loaded === true) {
-                    // Model is loaded but size is 0 - show parameter count if available
-                    const paramSize = info.details?.parameter_size || info.parameter_size || '';
-                    if (paramSize && !/^\d{10,}$/.test(paramSize)) {
-                        const normalized = paramSize
-                            .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
-                            .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
-                            .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
-                            .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
-                        badge.textContent += ` ${normalized}`;
+                // Helper: normalize parameter count to billions (B)
+                function formatParams(sizeStr) {
+                    if (!sizeStr) return '';
+                    // If already has B/M/K/T suffix, normalize to B
+                    return sizeStr
+                        .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
+                        .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
+                        .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
+                        .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
+                }
+                
+                // Build badge text based on model type
+                if (info.loaded === true) {
+                    if (isCloud) {
+                        badge.textContent = '● Cloud';
+                    } else {
+                        badge.textContent = '● Loaded';
                     }
+                    
+                    // Add file size for local loaded models
+                    if (!isCloud && sizeBytes > 0) {
+                        badge.textContent += ` ${formatFileSize(sizeBytes)}`;
+                    }
+                    
+                    // Add parameter count if available (for all models)
+                    if (paramSize && !/^\d{10,}$/.test(paramSize)) {
+                        badge.textContent += ` [${formatParams(paramSize)}]`;
+                    }
+                } else if (info.loaded === false) {
+                    badge.className = 'model-info-badge';
+                    badge.textContent = '○ Unloaded';
+                    if (paramSize && !/^\d{10,}$/.test(paramSize)) {
+                        badge.textContent += ` [${formatParams(paramSize)}]`;
+                    }
+                    badge.style.display = 'inline-block';
+                } else {
+                    badge.style.display = 'none';
                 }
             } catch (e) {
                 badge.style.display = 'none';
