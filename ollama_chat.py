@@ -621,7 +621,7 @@ def send_to_ollama(model, messages, tools=None, stream=False):
             headers={'Content-Type': 'application/json'}
         )
 
-        timeout = 300 if stream else 180
+        timeout = 600 if stream else 180
         with urllib.request.urlopen(req, timeout=timeout) as response:
             if stream:
                 return response  # Return the response object for streaming
@@ -1428,7 +1428,7 @@ def api_chat_stream():
             )
 
             logger.info("Sending request to Ollama model=%s at %s", model, datetime.now().isoformat())
-            with urllib.request.urlopen(req, timeout=300) as response:
+            with urllib.request.urlopen(req, timeout=600) as response:
                 tool_calls_buffer = []
                 current_tool_call = None
 
@@ -1813,7 +1813,7 @@ def api_chat_stream():
                                 data=data_bytes,
                                 headers={'Content-Type': 'application/json'}
                             )
-                            with urllib.request.urlopen(req2, timeout=300) as response2:
+                            with urllib.request.urlopen(req2, timeout=600) as response2:
                                 for line in response2:
                                     line = line.decode('utf-8').strip()
                                     if not line:
@@ -1865,7 +1865,7 @@ def api_chat_stream():
                             headers={'Content-Type': 'application/json'}
                         )
                         fb_full = ''
-                        with urllib.request.urlopen(fb_req, timeout=300) as fb_resp:
+                        with urllib.request.urlopen(fb_req, timeout=600) as fb_resp:
                             for fb_line in fb_resp:
                                 fb_line = fb_line.decode('utf-8').strip()
                                 if not fb_line: continue
