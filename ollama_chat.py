@@ -224,17 +224,17 @@ def execute_local_command(cmd):
             logger.warning("Blocked dangerous command: %s", cmd)
             return "[Security] This command is not allowed."
 
+        # Special handling for xdg-open / open - intercept HTML files for in-chat preview
+        parts = cmd.split()
+        if parts and parts[0] in ('xdg-open', 'open') and len(parts) > 1:
+            target = parts[-1]
+            if target.endswith('.html') or target.endswith('.htm'):
+                return f"[HTML_PREVIEW:{target}]"
+
         # Validate and parse
         parsed = validate_command(cmd)
         if parsed is None:
             return "[Security] This command is not allowed."
-
-        # Special handling for xdg-open / open - intercept HTML files for in-chat preview
-        if parsed[0] in ('xdg-open', 'open') and len(parsed) > 1:
-            target = parsed[-1]
-            if target.endswith('.html') or target.endswith('.htm'):
-                # Return a special marker that the frontend will interpret as "show preview"
-                return f"[HTML_PREVIEW:{target}]"
 
         result = sp.run(
             parsed,
