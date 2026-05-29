@@ -247,6 +247,103 @@ def is_write_command(cmd):
     return False
 
 
+def merge_tool_calls(tool_calls_buffer):
+    """Merge incremental streaming tool call chunks by ID.
+    
+    Ollama's streaming API sends tool calls incrementally — each chunk may
+    contain a partial update with the same tool_call ID. We need to merge
+    these fragments into complete tool calls before executing them.
+    
+    Returns a list of complete, merged tool call dicts.
+    """
+    if not tool_calls_buffer:
+        return []
+    
+    merged = {}  # id -> merged tool call dict
+    ordered_ids = []  # preserve order of first appearance
+    
+    for tc in tool_calls_buffer:
+        tc_id = tc.get('id')
+        func = tc.get('function', {})
+        func_name = func.get('name', '')
+        func_args = func.get('arguments', {})
+        
+        if tc_id is None:
+            # No ID — this might be a complete tool call or a fragment without ID.
+            # If it has a function name, treat it as complete.
+            if func_name:
+                # Use a synthetic ID based on index
+                tc_id = f'_synthetic_{len(merged)}'
+            else:
+                # Incomplete fragment with no name — skip it
+                continue
+        
+        if tc_id in merged:
+            # Merge with existing entry
+            existing = merged[tc_id]
+            existing_func = existing.get('function', {})
+            # Merge function name (prefer non-empty)
+            if func_name and not existing_func.get('name'):
+                existing_func['name'] = func_name
+            # Merge arguments — deep merge dicts, concatenate strings
+            if isinstance(func_args, dict) and isinstance(existing_func.get('arguments'), dict):
+                for k, v in func_args.items():
+                    if k in existing_func['arguments']:
+                        # Concatenate string values (Ollama streams them in pieces)
+                        if isinstance(existing_func['arguments'][k], str) and isinstance(v, str):
+                            existing_func['arguments'][k] += v
+                        else:
+                            # For non-string values, take the newer one if it's more complete
+                            existing_func['arguments'][k] = v
+                    else:
+                        existing_func['arguments'][k] = v
+            elif isinstance(func_args, str) and isinstance(existing_func.get('arguments'), str):
+                # Arguments arriving as JSON string fragments
+                existing['function']['arguments'] += func_args
+            elif func_args and not existing_func.get('arguments'):
+                existing_func['arguments'] = func_args
+            # Preserve internal flags
+            for key in ('_write_action', '_write_denied'):
+                if key in tc and key not in existing:
+                    existing[key] = tc[key]
+        else:
+            # New tool call
+            merged[tc_id] = dict(tc)  # shallow copy
+            ordered_ids.append(tc_id)
+    
+    # Parse any string arguments into dicts (Ollama sometimes sends args as JSON strings)
+    for tc_id in ordered_ids:
+        tc = merged[tc_id]
+        func = tc.get('function', {})
+        args = func.get('arguments')
+        if isinstance(args, str):
+            try:
+                func['arguments'] = json.loads(args)
+            except json.JSONDecodeError:
+                # Partial JSON from streaming — try to fix common issues
+                try:
+                    # Try adding closing braces
+                    func['arguments'] = json.loads(args + '}')
+                except json.JSONDecodeError:
+                    # Can't parse, keep as-is (might still work as a raw command string)
+                    logger.warning("Could not parse tool call arguments as JSON: %s", args[:200])
+    
+    return [merged[tid] for tid in ordered_ids]
+
+
+def parse_tool_args(args):
+    """Parse tool call arguments, handling both dict and JSON string formats.
+    Ollama sometimes sends arguments as a JSON string rather than a dict."""
+    if isinstance(args, dict):
+        return args
+    if isinstance(args, str):
+        try:
+            return json.loads(args)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
 def check_write_permission(cmd, session_id):
     """Check if a write command is allowed for this session.
     Returns 'allowed' if the command can proceed, or 'ask' if permission is needed."""
@@ -271,6 +368,8 @@ def execute_write_command(cmd, session_id):
         if not cmd:
             return "[Error] Empty command"
 
+        logger.info("execute_write_command: session=%s, cmd=%s", session_id, cmd[:300])
+
         # For write commands, we execute with shell=True but with basic safety
         # (the permission system is the safety gate)
         # Still block truly catastrophic patterns
@@ -279,17 +378,26 @@ def execute_write_command(cmd, session_id):
             if pattern in cmd:
                 return "[Security] This command is blocked for safety."
 
+        # Use bash to properly handle heredocs, pipes, redirections, etc.
+        # shell=True with a string requires bash for heredoc support
         result = sp.run(
-            cmd,
-            shell=True,
+            ['bash', '-c', cmd],
             capture_output=True,
             text=True,
             timeout=30,
             cwd=os.path.expanduser('~')
         )
 
-        output = result.stdout.strip() or result.stderr.strip() or "Command executed successfully (no output)"
-        logger.info("Executed write command (session=%s): %s", session_id, cmd)
+        output = result.stdout.strip() or result.stderr.strip() or ""
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if stderr:
+                output = f"[Exit code {result.returncode}] {output}\nstderr: {stderr}" if output else f"[Exit code {result.returncode}] {stderr}"
+            elif not output:
+                output = f"[Exit code {result.returncode}] Command failed with no output"
+        elif not output:
+            output = "Command executed successfully (no output)"
+        logger.info("Write command result (session=%s, rc=%d): %s", session_id, result.returncode, output[:200])
         return output[:5000]
 
     except sp.TimeoutExpired:
@@ -482,16 +590,17 @@ def process_ollama_response(model, messages, tools=None):
         tool_results = []
         for tool_call in tool_calls:
             func_name = tool_call.get('function', {}).get('name', '')
-            func_args = tool_call.get('function', {}).get('arguments', {})
+            func_args = parse_tool_args(tool_call.get('function', {}).get('arguments', {}))
             tool_id = tool_call.get('id', f'tool_{i}')
 
             logger.info("Tool call #%d: %s(%s)", i + 1, func_name, json.dumps(func_args))
 
             if func_name == 'local_command':
                 cmd = func_args.get('command', '')
-                # Check if this is a write command
+                # Execute write commands too (auto-approved in non-streaming fallback)
                 if is_write_command(cmd):
-                    result = "[Security] Write commands require streaming mode for permission confirmation. Please retry in streaming mode."
+                    logger.info("Non-streaming: executing write command: %s", cmd[:200])
+                    result = execute_write_command(cmd, 'non-streaming')
                 else:
                     result = execute_local_command(cmd)
                 tool_results.append({
@@ -1192,24 +1301,19 @@ def api_chat_stream():
                         eval_count = chunk.get('eval_count', 0)
 
                         # If we have pending tool calls, process them
+                        # IMPORTANT: Merge streaming fragments first — Ollama sends
+                        # tool calls incrementally, so we may have multiple partial
+                        # chunks for the same tool call that need to be assembled.
                         if tool_calls_buffer:
-                            # Pre-process write commands: check permissions via SSE
-                            write_cmd_indices = []
-                            for i_t, tc in enumerate(tool_calls_buffer):
-                                tc_name = tc.get('function', {}).get('name', '')
-                                tc_args = tc.get('function', {}).get('arguments', {})
-                                if tc_name == 'local_command':
-                                    cmd = tc_args.get('command', '')
-                                    if is_write_command(cmd):
-                                        perm = check_write_permission(cmd, current_chat_id)
-                                        if perm == 'ask':
-                                            write_cmd_indices.append((i_t, cmd))
+                            merged_tool_calls = merge_tool_calls(tool_calls_buffer)
+                            logger.info("Merged %d raw tool call chunks into %d complete tool calls",
+                                        len(tool_calls_buffer), len(merged_tool_calls))
 
-                            # Collect write commands that need permission
+                            # Pre-process write commands: check permissions
                             write_cmds_to_request = []
-                            for i_t, tc in enumerate(tool_calls_buffer):
+                            for i_t, tc in enumerate(merged_tool_calls):
                                 tc_name = tc.get('function', {}).get('name', '')
-                                tc_args = tc.get('function', {}).get('arguments', {})
+                                tc_args = parse_tool_args(tc.get('function', {}).get('arguments', {}))
                                 if tc_name == 'local_command':
                                     cmd = tc_args.get('command', '')
                                     if is_write_command(cmd):
@@ -1224,21 +1328,20 @@ def api_chat_stream():
                                                 'q': queue.Queue()
                                             }
 
-                            # If there are write commands needing permission, auto-approve for now
+                            # If there are write commands needing permission, auto-approve
                             # and notify the user what was executed
                             # (SSE permission popup doesn't work reliably due to buffering)
                             if write_cmds_to_request:
                                 for item in write_cmds_to_request:
                                     logger.info("Auto-approving write command: %s", item['cmd'])
-                                    tc = tool_calls_buffer[item['idx']]
-                                    tc['_write_action'] = 'once'
+                                    merged_tool_calls[item['idx']]['_write_approved'] = True
                                 # Notify user what commands are being executed
                                 cmds_str = ', '.join([item['cmd'] for item in write_cmds_to_request])
                                 yield f"data: {json.dumps({'type': 'write_executed', 'commands': [item['cmd'] for item in write_cmds_to_request], 'session_id': current_chat_id})}\n\n"
 
                             # Process tool calls - now with write permission resolved
                             tool_results = _process_tool_calls_streaming(
-                                model, session_data, tool_calls_buffer,
+                                model, session_data, merged_tool_calls,
                                 full_response, prompt_tokens, current_chat_id
                             )
                             # Send tool results back to Ollama for final response
@@ -1247,8 +1350,9 @@ def api_chat_stream():
                                 followup_messages.append({'role': msg['role'], 'content': msg['content']})
                             # Add assistant message with tool calls (strip internal flags first)
                             clean_tool_calls = []
-                            for tc in tool_calls_buffer:
-                                clean_tc = {k: v for k, v in tc.items() if k != '_write_denied'}
+                            for tc in merged_tool_calls:
+                                clean_tc = {k: v for k, v in tc.items()
+                                            if k not in ('_write_approved', '_write_denied', '_write_action')}
                                 clean_tool_calls.append(clean_tc)
                             followup_messages.append({'role': 'assistant', 'content': full_response or '', 'tool_calls': clean_tool_calls})
                             # Add tool results
@@ -1285,7 +1389,7 @@ def api_chat_stream():
                                     # Check if any of the tool calls are write commands - if so, let them execute
                                     has_write_cmd = False
                                     for tc in followup_tool_calls:
-                                        tc_args = tc.get('function', {}).get('arguments', {})
+                                        tc_args = parse_tool_args(tc.get('function', {}).get('arguments', {}))
                                         if tc.get('function', {}).get('name') == 'local_command' and is_write_command(tc_args.get('command', '')):
                                             has_write_cmd = True
                                             break
@@ -1300,7 +1404,7 @@ def api_chat_stream():
                                         followup_messages.append({'role': 'assistant', 'content': followup_content, 'tool_calls': followup_tool_calls})
                                         for tc in followup_tool_calls:
                                             tc_name = tc.get('function', {}).get('name', '')
-                                            tc_args = tc.get('function', {}).get('arguments', {})
+                                            tc_args = parse_tool_args(tc.get('function', {}).get('arguments', {}))
                                             tc_id = tc.get('id', f'tool_{round_num}_{len(followup_tool_calls)}')
                                             if tc_name == 'local_command':
                                                 cmd = tc_args.get('command', '')
@@ -1360,7 +1464,7 @@ def api_chat_stream():
                                     followup_messages.append({'role': 'assistant', 'content': '', 'tool_calls': followup_tool_calls})
                                     for tc in followup_tool_calls:
                                         tc_name = tc.get('function', {}).get('name', '')
-                                        tc_args = tc.get('function', {}).get('arguments', {})
+                                        tc_args = parse_tool_args(tc.get('function', {}).get('arguments', {}))
                                         tc_id = tc.get('id', f'tool_{round_num}_{len(followup_tool_calls)}')
                                         logger.info("Follow-up tool call: %s(%s)", tc_name, json.dumps(tc_args))
                                         if tc_name == 'web_search':
@@ -1577,19 +1681,22 @@ def _process_tool_calls_streaming(model, session_data, tool_calls, current_conte
     tool_results = []
     for i, tool_call in enumerate(tool_calls):
         func_name = tool_call.get('function', {}).get('name', '')
-        func_args = tool_call.get('function', {}).get('arguments', {})
+        func_args = parse_tool_args(tool_call.get('function', {}).get('arguments', {}))
         tool_id = tool_call.get('id', f'tool_{i}')
 
         logger.info("Stream tool call: %s(%s)", func_name, json.dumps(func_args))
 
         if func_name == 'local_command':
             cmd = func_args.get('command', '')
-            # Check if this was denied by the permission system
+            # Check if this was denied or approved by the permission system
             if tool_call.get('_write_denied'):
                 result = "[Permission denied] Task cancelled"
             elif is_write_command(cmd):
-                # Write command with permission granted - execute it
+                # Write command — execute it (permission was already auto-approved
+                # or granted by the user via the SSE permission flow)
+                logger.info("Executing write command: %s", cmd[:200])
                 result = execute_write_command(cmd, current_chat_id)
+                logger.info("Write command result: %s", str(result)[:200])
             else:
                 result = execute_local_command(cmd)
             tool_results.append({'role': 'tool', 'content': result, 'tool_call_id': tool_id})
