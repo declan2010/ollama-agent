@@ -2016,17 +2016,27 @@
 
     <script>
         function emergencyCollapse() {
-            var msgs = document.querySelectorAll('.message-content');
-            var n = 0;
-            for (var i = 0; i < msgs.length; i++) {
-                if (msgs[i].innerHTML.length > 500) {
-                    msgs[i].style.maxHeight = '150px';
-                    msgs[i].style.overflowY = 'auto';
-                    msgs[i].style.border = '2px solid #e74c3c';
-                    n++;
+            var pres = document.querySelectorAll('.message-content pre');
+            var count = 0;
+            for (var i = 0; i < pres.length; i++) {
+                if (pres[i].scrollHeight > 150) {
+                    pres[i].style.maxHeight = '80px';
+                    pres[i].style.overflow = 'auto';
+                    pres[i].style.display = 'block';
+                    count++;
                 }
             }
-            alert('Collapsed ' + n + ' large message(s) to 150px. Scroll to see content.');
+            // Also collapse any large divs inside message-content (like iframes, raw HTML)
+            var msgs = document.querySelectorAll('.message-content');
+            for (var j = 0; j < msgs.length; j++) {
+                if (msgs[j].innerHTML.length > 500 && !msgs[j].querySelector('pre')) {
+                    msgs[j].style.maxHeight = '150px';
+                    msgs[j].style.overflowY = 'auto';
+                    msgs[j].style.border = '2px solid #e74c3c';
+                    count++;
+                }
+            }
+            alert('Collapsed ' + count + ' block(s). Scroll to see content.');
         }
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') emergencyCollapse();
