@@ -827,8 +827,15 @@ def index():
         session['chat_id'] = str(uuid.uuid4())[:8]
         session['model'] = models[0] if models else 'llama3'
 
+    # Separate models into local and cloud for template
+    all_models = get_ollama_models()
+    local_models = [m for m in all_models if ':cloud' not in m and '-cloud' not in m and not m.startswith('x/') and 'embed' not in m.lower()]
+    if not local_models:
+        local_models = ['gemma4:e4b']  # fallback default
+
     return render_template('index.html',
-                           models=models,
+                           models=all_models,
+                           local_models=local_models,
                            sessions=sessions,
                            current_model=session.get('model', ''),
                            base_chat_model=BASE_CHAT_MODEL)
@@ -838,6 +845,70 @@ def index():
 def api_models():
     """API to get models"""
     return jsonify(get_ollama_models())
+
+
+@app.route('/api/models/local')
+def api_models_local():
+    """API to get local (non-cloud) models only"""
+    all_models = get_ollama_models()
+    local = [m for m in all_models if ':cloud' not in m and '-cloud' not in m and not m.startswith('x/') and 'embed' not in m.lower()]
+    if not local:
+        logger.info("No local models found, pulling llama3.2:1b...")
+        try:
+            import urllib.request
+            pull_req = urllib.request.Request(
+                f'{OLLAMA_BASE_URL}/api/pull',
+                data=json.dumps({"name": "llama3.2:1b", "stream": False}).encode(),
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(pull_req, timeout=300) as pull_resp:
+                pull_data = json.loads(pull_resp.read())
+                logger.info("Pulled llama3.2:1b: %s", pull_data.get('status', 'done'))
+        except Exception as pull_err:
+            logger.error("Failed to pull fallback model: %s", pull_err)
+        # Refresh
+        all_models = get_ollama_models()
+        local = [m for m in all_models if ':cloud' not in m and '-cloud' not in m and not m.startswith('x/') and 'embed' not in m.lower()]
+    return jsonify(local)
+
+
+@app.route('/api/models/download', methods=['POST'])
+def api_models_download():
+    """Download a model via Ollama pull. Returns SSE progress."""
+    data = request.json or {}
+    model_name = data.get('model', '')
+    if not model_name:
+        return jsonify({'error': 'Model name required'}), 400
+
+    def generate():
+        import urllib.request
+        try:
+            yield f"data: {json.dumps({'type': 'progress', 'status': 'pulling', 'model': model_name})}\n\n"
+            pull_req = urllib.request.Request(
+                f'{OLLAMA_BASE_URL}/api/pull',
+                data=json.dumps({"name": model_name, "stream": True}).encode(),
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(pull_req, timeout=600) as pull_resp:
+                for line in pull_resp:
+                    try:
+                        chunk = json.loads(line)
+                        status = chunk.get('status', '')
+                        if 'total' in chunk and 'completed' in chunk:
+                            pct = int(chunk['completed'] / chunk['total'] * 100) if chunk['total'] > 0 else 0
+                            yield f"data: {json.dumps({'type': 'progress', 'status': status, 'model': model_name, 'percent': pct, 'completed': chunk['completed'], 'total': chunk['total']})}\n\n"
+                        elif status == 'success':
+                            yield f"data: {json.dumps({'type': 'progress', 'status': 'success', 'model': model_name})}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'type': 'progress', 'status': status, 'model': model_name})}\n\n"
+                    except json.JSONDecodeError:
+                        continue
+            yield f"data: {json.dumps({'type': 'done', 'model': model_name})}\n\n"
+        except Exception as e:
+            logger.error("Model download failed: %s", e)
+            yield f"data: {json.dumps({'type': 'error', 'model': model_name, 'error': str(e)})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
 
 
 @app.route('/api/model-info')
