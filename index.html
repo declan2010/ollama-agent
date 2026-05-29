@@ -865,7 +865,7 @@
     <div class="main">
         <div class="header">
             <div class="header-left">
-                <div class="model-selector">
+                <div class="model-selector" id="basicModelContainer">
                     <label>Basic:</label>
                     <select id="baseModelSelect">
                         <option value="">Auto</option>
@@ -876,7 +876,7 @@
                     <input type="checkbox" id="forceBasic" title="Force Basic model only (no escalation)" style="cursor:pointer;">
                     <label for="forceBasic" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Basic model, never escalate to Agent">Force</label>
                 </div>
-                <div class="model-selector">
+                <div class="model-selector" id="advancedModelContainer">
                     <label>Advanced:</label>
                     <select id="modelSelect">
                         {% for model in cloud_models %}
@@ -886,7 +886,7 @@
                     <input type="checkbox" id="forceAdvanced" title="Force Advanced model with tools" style="cursor:pointer;">
                     <label for="forceAdvanced" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Advanced model with tools">Force</label>
                 </div>
-                <div class="model-selector">
+                <div class="model-selector" id="fallbackModelContainer">
                     <label>Backup:</label>
                     <select id="fallbackModelSelect">
                         <option value="">None</option>
@@ -1456,6 +1456,53 @@
             }
         }
 
+        function highlightActiveModelSelect(route, model) {
+            // Reset all containers
+            var basicContainer = document.getElementById('basicModelContainer');
+            var advancedContainer = document.getElementById('advancedModelContainer');
+            var fallbackContainer = document.getElementById('fallbackModelContainer');
+            
+            if (basicContainer) {
+                basicContainer.style.border = '';
+                basicContainer.style.borderRadius = '';
+                basicContainer.style.padding = '';
+                basicContainer.style.background = '';
+            }
+            if (advancedContainer) {
+                advancedContainer.style.border = '';
+                advancedContainer.style.borderRadius = '';
+                advancedContainer.style.padding = '';
+                advancedContainer.style.background = '';
+            }
+            if (fallbackContainer) {
+                fallbackContainer.style.border = '';
+                fallbackContainer.style.borderRadius = '';
+                fallbackContainer.style.padding = '';
+                fallbackContainer.style.background = '';
+            }
+            
+            // Highlight the active one
+            var target = null;
+            var color = '';
+            if (route === 'basic' || route === 'base_first') {
+                target = basicContainer;
+                color = 'rgba(34,197,94,0.4)'; // green
+            } else if (route === 'advanced' || route === 'advanced_direct' || route === 'escalated') {
+                target = advancedContainer;
+                color = 'rgba(59,130,246,0.4)'; // blue
+            } else if (route === 'fallback') {
+                target = fallbackContainer;
+                color = 'rgba(234,179,8,0.4)'; // amber
+            }
+            
+            if (target) {
+                target.style.border = '2px solid ' + color.replace('0.4', '0.8');
+                target.style.borderRadius = '8px';
+                target.style.padding = '4px 8px';
+                target.style.background = color.replace('0.4', '0.1');
+            }
+        }
+
         async function loadSessions() {
             try {
                 const response = await fetch('/api/sessions');
@@ -1784,6 +1831,8 @@
                                         routeMsg.className = 'model-routing-badge';
                                         lastMsg.parentNode.insertBefore(routeMsg, lastMsg);
                                     }
+                                    // Highlight the active model select in header
+                                    highlightActiveModelSelect(data.route, data.model);
                                 }
                             } else if (data.type === 'write_executed') {
                                 // Show notification of write commands executed
@@ -1881,6 +1930,9 @@
                                         modelBadge.textContent = icon + ' ' + data.used_model;
                                         lastMsg.appendChild(modelBadge);
                                     }
+                                    // Also highlight the select in header based on final used model
+                                    const finalRoute = data.is_local ? 'basic' : 'advanced';
+                                    highlightActiveModelSelect(finalRoute, data.used_model);
                                 }
                                 // Update model status after response (model is now loaded)
                                 checkModelStatus();
