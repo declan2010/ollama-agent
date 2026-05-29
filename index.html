@@ -1993,6 +1993,13 @@
                                 if (data.used_model) {
                                     window.lastUsedModel = data.used_model;
                                     window.lastUsedIsLocal = data.is_local;
+                                    // DEBUG: Store values for inspection
+                                    window.debugBadgeData = {
+                                        usedModel: data.used_model,
+                                        size: data.size,
+                                        paramSize: data.parameter_size,
+                                        isLocal: data.is_local
+                                    };
                                     updateBadgeForUsedModel(data.used_model, data.is_local, data.parameter_size || '', data.size || 0);
                                 }
                                 // Show which model responded (always visible, color-coded)
