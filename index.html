@@ -1283,11 +1283,9 @@
                     badge.style.display = 'none';
                 }
 
-                // Show model parameter size (prioritize over file size)
+                // Show model size - use actual file size, not parameter_size which can be wrong
                 const sizeBytes = info.size || 0;
                 const paramSize = info.details?.parameter_size || info.parameter_size || '';
-                // DEBUG: show raw values
-                badge.setAttribute('title', 'paramSize: ' + paramSize + ' | sizeBytes: ' + sizeBytes);
                 
                 // Helper: format bytes to human readable
                 function formatBytes(bytes) {
@@ -1297,22 +1295,17 @@
                     return bytes + 'B';
                 }
                 
-                if (paramSize) {
-                    // Check if paramSize is a raw number (no B/M/K suffix) = file size mistakenly labeled as parameter_size
-                    if (/^\d+$/.test(paramSize) && parseInt(paramSize) > 1000000000) {
-                        // It's a file size in bytes, not parameter count
-                        badge.textContent += ` ${formatBytes(parseInt(paramSize))}`;
-                    } else {
-                        // Normalize parameter size to billions (B)
-                        const normalized = paramSize
-                            .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
-                            .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
-                            .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
-                            .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
-                        badge.textContent += ` ${normalized}`;
-                    }
-                } else if (sizeBytes > 0) {
+                // Always use actual file size (info.size) if available - it's accurate
+                if (sizeBytes > 0) {
                     badge.textContent += ` ${formatBytes(sizeBytes)}`;
+                } else if (paramSize) {
+                    // Fallback: if no size, try parameter_size (normalize to B for params)
+                    const normalized = paramSize
+                        .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
+                        .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
+                        .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
+                        .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
+                    badge.textContent += ` ${normalized}`;
                 }
             } catch (e) {
                 badge.style.display = 'none';
