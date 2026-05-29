@@ -1283,29 +1283,32 @@
                     badge.style.display = 'none';
                 }
 
-                // Show model size - use actual file size, not parameter_size which can be wrong
+                // Show model size - use actual file size from Ollama /api/ps
                 const sizeBytes = info.size || 0;
-                const paramSize = info.details?.parameter_size || info.parameter_size || '';
                 
-                // Helper: format bytes to human readable
+                // Helper: format bytes to human readable (base 1024)
                 function formatBytes(bytes) {
-                    if (bytes >= 1099511627776) return (bytes / 1099511627776).toFixed(1) + 'TB';
-                    if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + 'GB';
+                    if (bytes >= 1099511627776) return (bytes / 1099511627776).toFixed(2) + 'TB';
+                    if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + 'GB';
                     if (bytes >= 1048576) return (bytes / 1048576).toFixed(0) + 'MB';
+                    if (bytes >= 1024) return (bytes / 1024).toFixed(0) + 'KB';
                     return bytes + 'B';
                 }
                 
-                // Always use actual file size (info.size) if available - it's accurate
-                if (sizeBytes > 0) {
+                // Only show size for loaded local models (cloud models don't have file size)
+                if (info.loaded === true && sizeBytes > 0) {
                     badge.textContent += ` ${formatBytes(sizeBytes)}`;
-                } else if (paramSize) {
-                    // Fallback: if no size, try parameter_size (normalize to B for params)
-                    const normalized = paramSize
-                        .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
-                        .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
-                        .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
-                        .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
-                    badge.textContent += ` ${normalized}`;
+                } else if (info.loaded === true) {
+                    // Model is loaded but size is 0 - show parameter count if available
+                    const paramSize = info.details?.parameter_size || info.parameter_size || '';
+                    if (paramSize && !/^\d{10,}$/.test(paramSize)) {
+                        const normalized = paramSize
+                            .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
+                            .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
+                            .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
+                            .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
+                        badge.textContent += ` ${normalized}`;
+                    }
                 }
             } catch (e) {
                 badge.style.display = 'none';
