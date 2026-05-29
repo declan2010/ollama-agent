@@ -6,6 +6,7 @@
     <title>Ollama-Agent</title>
     <!-- Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.5/dist/purify.min.js"></script>
     <!-- Code highlighting -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/atom-one-dark.min.css">
     <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
@@ -432,7 +433,7 @@
         .message-content blockquote {
             border-left: 3px solid var(--accent);
             padding-left: 12px;
-            margin: 10px 0;
+            margin: 15px 0;
             color: var(--text-secondary);
             font-style: italic;
         }
@@ -442,7 +443,7 @@
             padding: 15px;
             border-radius: 8px;
             overflow-x: auto;
-            margin: 10px 0;
+            margin: 15px 0;
             font-family: 'Courier New', monospace;
             font-size: 0.85rem;
             position: relative;
@@ -463,20 +464,39 @@
         }
 
         .message-content table {
+            display: block;
+            overflow-x: auto;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            border-radius: 8px;
+            border: 1px solid var(--border);
             border-collapse: collapse;
-            margin: 10px 0;
+            margin: 15px 0;
             width: 100%;
         }
 
         .message-content th, .message-content td {
             border: 1px solid var(--border);
-            padding: 8px 12px;
+            padding: 10px 15px;
             text-align: left;
         }
 
         .message-content th {
+            color: var(--accent);
+            border-bottom: 2px solid var(--accent);
             background: var(--bg-tertiary);
             font-weight: bold;
+        }
+
+        .message-content tr:nth-child(even) {
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .message-content tr:hover {
+            background-color: rgba(233, 69, 96, 0.1);
+        }
+
+        .message-content td {
+            white-space: pre-wrap;
         }
 
         .message-content a {
@@ -968,6 +988,7 @@
         let currentSessionId = '{{ session.get("chat_id", "") }}';
         let isWaiting = false;
         let currentEventSource = null;
+        let currentAbortController = null;
         let maxContextTokens = 4096;
 
         const chatArea = document.getElementById('chatArea');
@@ -1002,16 +1023,23 @@
         function renderMarkdown(text) {
             if (typeof marked !== 'undefined') {
                 try {
-                    return marked.parse(text);
+                    let html = marked.parse(text);
+                    // Sanitize HTML to prevent XSS
+                    if (typeof DOMPurify !== 'undefined') {
+                        html = DOMPurify.sanitize(html, {
+                            ALLOWED_TAGS: ['h1','h2','h3','h4','h5','h6','p','br','hr','ul','ol','li','a','strong','em','b','i','u','s','code','pre','blockquote','table','thead','tbody','tr','th','td','img','div','span','details','summary','sup','sub','dl','dt','dd'],
+                            ALLOWED_ATTR: ['href','src','alt','title','class','id','target','rel','colspan','rowspan','style']
+                        });
+                    }
+                    return html;
                 } catch (e) {
                     // Fallback to basic rendering
                 }
             }
             // Fallback: basic formatting
-            return text
-                .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-                .replace(/`([^`]+)`/g, '<code>$1</code>')
-                .replace(/\n/g, '<br>');
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         // Add copy buttons to code blocks after rendering
@@ -1470,6 +1498,12 @@
 
         // Stop generation
         function stopGeneration() {
+            // Abort streaming fetch if active
+            if (currentAbortController) {
+                currentAbortController.abort();
+                currentAbortController = null;
+            }
+            // Close legacy EventSource if active
             if (currentEventSource) {
                 currentEventSource.close();
                 currentEventSource = null;
@@ -1537,8 +1571,11 @@
             const contentEl = document.querySelector('#streaming-message .message-content');
             let fullResponse = '';
 
+            // Create AbortController for this request
+            currentAbortController = new AbortController();
+
             try {
-                // No timeout - wait for Ollama as long as it takes
+                // No timeout - wait for Ollama as long as it takes, but allow abort
                 const response = await fetch('/api/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1549,7 +1586,8 @@
                         base_model: baseModelSelect ? baseModelSelect.value : '',
                         force_advanced: document.getElementById('forceAdvanced') ? document.getElementById('forceAdvanced').checked : false,
                         force_basic: document.getElementById('forceBasic') ? document.getElementById('forceBasic').checked : false
-                    })
+                    }),
+                    signal: currentAbortController.signal
                 });
 
                 if (!response.ok) {
@@ -1663,13 +1701,20 @@
                     }
                 }
             } catch (e) {
-                const errMsg = e.message || 'Connection error. Please try again.';
-                if (!fullResponse) {
-                    if (contentEl) {
-                        contentEl.innerHTML = renderMarkdown(`**Error:** ${errMsg}`);
-                        addCopyButtons(contentEl);
+                if (e.name === 'AbortError') {
+                    // User cancelled - add partial response if any
+                    fullResponse += '\n\n*[Generation stopped]*';
+                } else {
+                    const errMsg = e.message || 'Connection error. Please try again.';
+                    if (!fullResponse) {
+                        if (contentEl) {
+                            contentEl.innerHTML = renderMarkdown(`**Error:** ${errMsg}`);
+                            addCopyButtons(contentEl);
+                        }
                     }
                 }
+            } finally {
+                currentAbortController = null;
             }
 
             // Remove streaming cursor

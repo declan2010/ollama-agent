@@ -29,7 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger('ollama-agent')
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24).hex())
+app.secret_key = os.environ.get('SECRET_KEY', 'ollama-webchat-secret-key-change-me')
 
 # --- Rate Limiting ---
 RATE_LIMIT_WINDOW = 60  # seconds
@@ -384,7 +384,7 @@ def execute_write_command(cmd, session_id):
             ['bash', '-c', cmd],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=120,
             cwd=os.path.expanduser('~')
         )
 
@@ -924,28 +924,28 @@ def _likely_needs_tools(message):
     if any(kw in msg_lower for kw in analysis_keywords):
         return True
     
-    # File/system/code operations
+    # File/system/code operations - specific phrases and commands only
     file_keywords = [
         # Spanish
         'archivo', 'carpeta', 'directorio', 'borrar', 'eliminar', 'editar',
-        'modificar', 'cambiar', 'escribir', 'guardar', 'crear archivo',
-        'instalar', 'ejecutar', 'correr', 'comando', 'terminal', 'consola',
+        'modificar', 'guardar', 'crear archivo',
+        'instalar', 'ejecutar', 'comando', 'terminal', 'consola',
         'escribí un script', 'haz un script', 'crea un script', 'genera un script',
         'haz un programa', 'crea un programa', 'programa un', 'codifica', 'codificar',
-        'lee el archivo', 'muestra el archivo', 'abre el archivo', 'cierra el archivo',
+        'lee el archivo', 'muestra el archivo', 'abre el archivo',
         'listar archivos', 'mover archivo', 'copiar archivo', 'renombrar',
         'compilar', 'deployar', 'desplegar', 'subir al server', 'git push',
         'commit', 'hacer commit', 'base de datos', 'sql', 'query',
-        'permisos', 'chmod', 'proceso', 'matar proceso', 'kill process',
+        'permisos', 'chmod', 'matar proceso', 'kill process',
         # English
-        'file', 'folder', 'directory', 'delete', 'remove', 'edit', 'modify',
-        'write', 'save', 'create file', 'install', 'execute', 'run', 'command',
-        'terminal', 'shell', 'bash', 'script', 'write a script', 'create a script',
+        'file', 'folder', 'directory', 'delete', 'remove file', 'edit file',
+        'modify', 'create file', 'install', 'execute', 'run command',
+        'terminal', 'shell', 'bash', 'write a script', 'create a script',
         'code up', 'code this', 'program this', 'implement', 'build a tool',
         'read the file', 'show me the file', 'open the file', 'cat ', 'ls ',
         'grep ', 'head ', 'tail ', 'list files', 'move file', 'copy file',
         'rename', 'compile', 'deploy', 'push to', 'git commit', 'database',
-        'sql', 'query', 'permissions', 'chmod', 'process', 'kill process',
+        'sql', 'query', 'permissions', 'chmod', 'kill process',
     ]
     if any(kw in msg_lower for kw in file_keywords):
         return True
@@ -995,28 +995,32 @@ def _likely_needs_tools(message):
     # Data/math/computation
     data_keywords = [
         # Spanish
-        'gráfico', 'gráfica', 'tabla', 'estadística', 'datos', 'dataset',
-        'cálculo', 'calcular', 'fórmula', 'ecuación', 'porcentaje',
-        'promedio', 'media', 'mediana', 'varianza',
+        'gráfico', 'gráfica', 'estadística', 'dataset',
+        'cálculo', 'fórmula', 'ecuación',
         # English
-        'chart', 'graph', 'plot', 'table', 'statistics', 'data', 'dataset',
-        'calculate', 'computation', 'formula', 'equation', 'percentage',
-        'average', 'mean', 'median', 'variance', 'correlation',
+        'chart', 'graph', 'plot', 'statistics', 'dataset',
+        'computation', 'formula', 'equation', 'correlation',
     ]
     if any(kw in msg_lower for kw in data_keywords):
         return True
     
-    # Creation/generation tasks
+    # Creation/generation tasks - only phrases, not short words
+    # Short words like 'crea', 'write', 'data' are too ambiguous and cause false positives
     creation_keywords = [
-        # Spanish
-        'genera', 'generar', 'crea', 'crear', 'diseña', 'diseñar',
-        'escribe', 'escribir', 'redacta', 'redactar', 'produce', 'producir',
-        'construye', 'construir', 'arma', 'armar', 'desarrolla', 'desarrollar',
+        # Spanish - phrases only
+        'genera un', 'generar un', 'crea un', 'crear un', 'diseña un', 'diseñar un',
+        'escribí un script', 'escribir un script', 'escribí un archivo', 'escribir un archivo',
+        'escribí un programa', 'escribir un programa',
+        'redacta un', 'redactar un',
+        'construye un', 'construir un', 'arma un', 'armar un',
+        'desarrolla un', 'desarrollar un',
         'haz una lista', 'haz una tabla', 'haz un resumen', 'haz un informe',
-        # English
-        'generate', 'create', 'design', 'write', 'draft', 'compose',
-        'produce', 'build', 'develop', 'make a list', 'make a table',
-        'make a summary', 'make a report', 'put together',
+        'haz un script', 'haz un programa', 'haz un archivo',
+        # English - phrases only
+        'write a script', 'write a file', 'write a program', 'write a file',
+        'generate a', 'create a', 'design a',
+        'build a tool', 'develop a',
+        'make a list', 'make a table', 'make a summary', 'make a report',
     ]
     if any(kw in msg_lower for kw in creation_keywords):
         return True
@@ -1328,16 +1332,47 @@ def api_chat_stream():
                                                 'q': queue.Queue()
                                             }
 
-                            # If there are write commands needing permission, auto-approve
-                            # and notify the user what was executed
-                            # (SSE permission popup doesn't work reliably due to buffering)
+                            # Handle write command permissions:
+                            # - First write in session: ask user (yield permission popup, block until answered)
+                            # - Subsequent writes: auto-approve (user already granted session permission)
                             if write_cmds_to_request:
+                                # Check which ones need to ask vs auto-approve
+                                need_to_ask = []
+                                auto_approved = []
                                 for item in write_cmds_to_request:
-                                    logger.info("Auto-approving write command: %s", item['cmd'])
+                                    perm = check_write_permission(item['cmd'], current_chat_id)
+                                    if perm == 'ask':
+                                        # First write in this session - ask user
+                                        need_to_ask.append(item)
+                                    else:
+                                        # Already approved for session/once - auto-approve
+                                        auto_approved.append(item)
+
+                                # Auto-approve ones that don't need asking
+                                for item in auto_approved:
+                                    logger.info("Auto-approving write command (session perm): %s", item['cmd'])
                                     merged_tool_calls[item['idx']]['_write_approved'] = True
-                                # Notify user what commands are being executed
-                                cmds_str = ', '.join([item['cmd'] for item in write_cmds_to_request])
-                                yield f"data: {json.dumps({'type': 'write_executed', 'commands': [item['cmd'] for item in write_cmds_to_request], 'session_id': current_chat_id})}\n\n"
+                                if auto_approved:
+                                    yield f"data: {json.dumps({'type': 'write_executed', 'commands': [item['cmd'] for item in auto_approved], 'session_id': current_chat_id})}\n\n"
+
+                                # Ask user for first write in session
+                                for item in need_to_ask:
+                                    logger.info("Asking user permission for write command: %s", item['cmd'])
+                                    yield f"data: {json.dumps({'type': 'write_permission_required', 'command': item['cmd'], 'session_id': current_chat_id, 'perm_id': item['perm_id']})}\n\n"
+                                    # Block until user responds via the /api/write-permission endpoint
+                                    perm_queue = _pending_permissions[item['perm_id']]['q']
+                                    action = perm_queue.get()  # blocks until frontend responds
+                                    del _pending_permissions[item['perm_id']]
+                                    if action == 'deny':
+                                        merged_tool_calls[item['idx']]['_write_denied'] = True
+                                    elif action == 'session':
+                                        _session_write_permissions[current_chat_id] = 'session'
+                                        merged_tool_calls[item['idx']]['_write_approved'] = True
+                                    elif action == 'once':
+                                        _session_write_permissions[current_chat_id] = 'once'
+                                        merged_tool_calls[item['idx']]['_write_approved'] = True
+                                    else:
+                                        merged_tool_calls[item['idx']]['_write_denied'] = True
 
                             # Process tool calls - now with write permission resolved
                             tool_results = _process_tool_calls_streaming(
@@ -1490,6 +1525,8 @@ def api_chat_stream():
                                             if is_write_command(cmd):
                                                 perm = check_write_permission(cmd, current_chat_id)
                                                 if perm == 'ask':
+                                                    # First write in session - ask user
+                                                    logger.info("Follow-up write needs permission: %s", cmd)
                                                     perm_id = str(uuid.uuid4())
                                                     q = queue.Queue()
                                                     _pending_permissions[perm_id] = {
@@ -1502,16 +1539,18 @@ def api_chat_stream():
                                                     del _pending_permissions[perm_id]
                                                     if action == 'deny':
                                                         tr_content = "[Permission denied] Task cancelled"
-                                                    elif action == 'once':
-                                                        _session_write_permissions[current_chat_id] = 'none'
-                                                        tr_content = execute_write_command(cmd, current_chat_id)
                                                     elif action == 'session':
+                                                        _session_write_permissions[current_chat_id] = 'session'
+                                                        tr_content = execute_write_command(cmd, current_chat_id)
+                                                    elif action == 'once':
+                                                        # Set to 'session' so rest of conversation auto-approves
                                                         _session_write_permissions[current_chat_id] = 'session'
                                                         tr_content = execute_write_command(cmd, current_chat_id)
                                                     else:
                                                         tr_content = "[Permission denied] Task cancelled"
                                                 else:
-                                                    # perm == 'allowed', already approved
+                                                    # Already approved for session - auto-approve
+                                                    logger.info("Follow-up write auto-approved (session perm): %s", cmd)
                                                     tr_content = execute_write_command(cmd, current_chat_id)
                                             else:
                                                 tr_content = execute_local_command(cmd)
@@ -1630,6 +1669,9 @@ def api_chat_stream():
         except Exception as e:
             logger.error("Streaming error: %s", e)
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+            # Always send done event so frontend doesn't hang
+            elapsed = round(time.time() - start_time, 2)
+            yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model, 'is_local': used_model == base_model, 'error': str(e)})}\n\n"
             # Still save what we have
             if full_response:
                 session_data['messages'].append({
@@ -1733,6 +1775,7 @@ def api_chat():
     fallback_model = data.get('fallback_model', '')
     base_model = data.get('base_model', '') or BASE_CHAT_MODEL
     force_basic = data.get('force_basic', False)
+    force_advanced = data.get('force_advanced', False)
 
     if not user_message:
         return jsonify({'error': 'Empty message'})
@@ -1814,11 +1857,74 @@ def api_chat():
             eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
             used_model = result.get('used_model', model) if isinstance(result, dict) else model
             is_local = (used_model == base_model)
-    else:
-        # Use Ollama tools (no regex-based command detection)
+    elif force_advanced or _likely_needs_tools(user_message):
+        # Use advanced model with tools directly
+        reason = 'forced' if force_advanced else 'needs_tools'
+        logger.info("Non-streaming: using advanced model %s directly (reason=%s)", model, reason)
         result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
         response_text = result.get('response', '') if isinstance(result, dict) else result
         prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
+        eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
+        used_model = model
+        is_local = False
+    else:
+        # Try base model first for simple queries (dual-model routing)
+        logger.info("Non-streaming: trying base model %s for simple query", base_model)
+        try:
+            import urllib.request as _urllib_base
+            base_api_messages = [{'role': 'system', 'content': 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'}]
+            for msg in session_data['messages']:
+                base_api_messages.append({
+                    'role': msg['role'],
+                    'content': msg['content']
+                })
+            base_payload = {
+                'model': base_model,
+                'messages': base_api_messages,
+                'stream': False,
+                'keep_alive': KEEP_ALIVE,
+            }
+            base_data_bytes = json.dumps(base_payload).encode('utf-8')
+            base_req = _urllib_base.Request(
+                f'{OLLAMA_BASE_URL}/api/chat',
+                data=base_data_bytes,
+                headers={'Content-Type': 'application/json'}
+            )
+            with _urllib_base.urlopen(base_req, timeout=300) as base_resp:
+                base_result = json.loads(base_resp.read().decode('utf-8'))
+            base_response = base_result.get('message', {}).get('content', '')
+            base_stripped = base_response.strip()
+            # Check for weak/ignorant answers
+            weak_patterns = [
+                'no sé', 'no se', 'no tengo', 'no puedo', 'i don\'t know', 'i cannot',
+                'as an ai', 'as a language model', 'como modelo de lenguaje',
+                'no tengo acceso', 'i don\'t have access', 'i can\'t help',
+            ]
+            is_weak = any(p in base_stripped.lower() for p in weak_patterns)
+            if base_stripped and len(base_stripped) >= 10 and not is_weak:
+                # Base model succeeded
+                response_text = base_response
+                prompt_tokens = base_result.get('prompt_eval_count', 0)
+                eval_count_val = base_result.get('eval_count', 0)
+                used_model = base_model
+                is_local = True
+            else:
+                # Escalate to advanced model
+                logger.info("Base model insufficient (len=%d, weak=%s), escalating to %s", len(base_stripped), is_weak, model)
+                result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
+                response_text = result.get('response', '') if isinstance(result, dict) else result
+                prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
+                eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
+                used_model = model
+                is_local = False
+        except Exception as e:
+            logger.warning("Base model %s failed: %s, falling back to advanced", base_model, e)
+            result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
+            response_text = result.get('response', '') if isinstance(result, dict) else result
+            prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
+            eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
+            used_model = model
+            is_local = False
 
     # Fallback model
     if (response_text.startswith('Error:') or response_text.startswith('[ERROR]')) and fallback_model and fallback_model != model:
