@@ -21,6 +21,27 @@ OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
 KEEP_ALIVE = os.environ.get('OLLAMA_KEEP_ALIVE', '5m')
 BASE_CHAT_MODEL = "gemma4:e4b"
 
+
+def is_cloud_model(model_name):
+    """Check if a model requires internet (cloud model)."""
+    if not model_name:
+        return False
+    return ':cloud' in model_name or '-cloud' in model_name
+
+
+def is_connectivity_error(error):
+    """Check if an error is caused by network/connectivity issues."""
+    error_str = str(error).lower()
+    connectivity_keywords = [
+        'connection refused', 'connection reset', 'timed out', 'timeout',
+        'name or service not known', 'no route to host', 'network is unreachable',
+        'connectionerror', 'urlopen error', 'ssl', 'certificate_verify',
+        'couldn\'t resolve host', 'couldn\'t connect', 'failed to establish',
+        'err_name_not_resolved', 'enotfound', 'econnrefused', 'econnreset',
+        'etimedout', 'socket.gaierror', 'proxy', '502', '503', '504',
+    ]
+    return any(kw in error_str for kw in connectivity_keywords)
+
 # --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
@@ -1712,42 +1733,107 @@ def api_chat_stream():
                 # If response was empty and no tool calls, try fallback
                 if not full_response and not tool_calls_buffer:
                     if fallback_model and fallback_model != model:
-                        logger.info("Primary model '%s' empty response, trying fallback '%s'", model, fallback_model)
-                        yield f"data: {json.dumps({'type': 'model_routing', 'route': 'fallback', 'model': fallback_model, 'reason': 'empty_response'})}\n\n"
-                        payload['model'] = fallback_model
-                        data_bytes = json.dumps(payload).encode('utf-8')
-                        req2 = urllib.request.Request(
-                            f'{OLLAMA_BASE_URL}/api/chat',
-                            data=data_bytes,
-                            headers={'Content-Type': 'application/json'}
-                        )
-                        with urllib.request.urlopen(req2, timeout=300) as response2:
-                            for line in response2:
-                                line = line.decode('utf-8').strip()
-                                if not line:
-                                    continue
-                                try:
-                                    chunk = json.loads(line)
-                                except json.JSONDecodeError:
-                                    continue
-                                if chunk.get('done'):
-                                    prompt_tokens = chunk.get('prompt_eval_count', 0)
-                                    eval_count = chunk.get('eval_count', 0)
-                                    used_model = fallback_model
-                                    break
-                                content = chunk.get('message', {}).get('content', '')
-                                if content:
-                                    full_response += content
-                                    sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
-                                    yield f"data: {sse_data}\n\n"
+                        # Smart fallback: skip cloud fallback if primary is cloud and failed
+                        if is_cloud_model(model) and is_cloud_model(fallback_model):
+                            logger.info("Primary cloud model empty response and fallback is also cloud — showing connectivity error")
+                            full_response = "⚠️ **Sin conexión a internet**\n\nLos modelos cloud no están disponibles en este momento.\n\n**Sugerencias:**\n- Seleccioná un modelo local en el selector **Basic**\n- Marcá **Force** junto a Basic para usar solo modelos locales\n- Verificá tu conexión a internet"
+                        else:
+                            logger.info("Primary model '%s' empty response, trying fallback '%s'", model, fallback_model)
+                            yield f"data: {json.dumps({'type': 'model_routing', 'route': 'fallback', 'model': fallback_model, 'reason': 'empty_response'})}\n\n"
+                            payload['model'] = fallback_model
+                            data_bytes = json.dumps(payload).encode('utf-8')
+                            req2 = urllib.request.Request(
+                                f'{OLLAMA_BASE_URL}/api/chat',
+                                data=data_bytes,
+                                headers={'Content-Type': 'application/json'}
+                            )
+                            with urllib.request.urlopen(req2, timeout=300) as response2:
+                                for line in response2:
+                                    line = line.decode('utf-8').strip()
+                                    if not line:
+                                        continue
+                                    try:
+                                        chunk = json.loads(line)
+                                    except json.JSONDecodeError:
+                                        continue
+                                    if chunk.get('done'):
+                                        prompt_tokens = chunk.get('prompt_eval_count', 0)
+                                        eval_count = chunk.get('eval_count', 0)
+                                        used_model = fallback_model
+                                        break
+                                    content = chunk.get('message', {}).get('content', '')
+                                    if content:
+                                        full_response += content
+                                        sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
+                                        yield f"data: {sse_data}\n\n"
 
         except Exception as e:
             logger.error("Streaming error: %s", e)
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+
+            # Smart error handling: detect connectivity issues
+            conn_error = is_connectivity_error(e)
+            both_cloud = is_cloud_model(model) and (not fallback_model or is_cloud_model(fallback_model))
+            primary_cloud = is_cloud_model(model)
+
+            if conn_error and primary_cloud:
+                # Advanced/cloud model failed due to connectivity
+                if both_cloud:
+                    # Both primary and fallback are cloud — no point trying fallback
+                    error_msg = "⚠️ **Sin conexión a internet**\n\n"
+                    error_msg += "Los modelos cloud no están disponibles en este momento.\n\n"
+                    error_msg += "**Sugerencias:**\n"
+                    error_msg += "- Seleccioná un modelo local en el selector **Basic**\n"
+                    error_msg += "- Marcá **Force** junto a Basic para usar solo modelos locales\n"
+                    error_msg += "- Verificá tu conexión a internet"
+                elif fallback_model and not is_cloud_model(fallback_model):
+                    # Primary cloud failed, but fallback is local — try it
+                    error_msg = f"⚠️ Modelo cloud **{model}** no disponible (sin conexión). Intentando con modelo local **{fallback_model}**...\n\n"
+                    yield f"data: {json.dumps({'type': 'token', 'content': error_msg, 'ts': round(time.time() - start_time, 2)})}\n\n"
+                    try:
+                        fb_payload = payload.copy() if 'payload' in dir() else {'messages': session_data['messages']}
+                        fb_payload['model'] = fallback_model
+                        fb_data_bytes = json.dumps(fb_payload).encode('utf-8')
+                        fb_req = urllib.request.Request(
+                            f'{OLLAMA_BASE_URL}/api/chat',
+                            data=fb_data_bytes,
+                            headers={'Content-Type': 'application/json'}
+                        )
+                        fb_full = ''
+                        with urllib.request.urlopen(fb_req, timeout=300) as fb_resp:
+                            for fb_line in fb_resp:
+                                fb_line = fb_line.decode('utf-8').strip()
+                                if not fb_line: continue
+                                try:
+                                    fb_chunk = json.loads(fb_line)
+                                except json.JSONDecodeError: continue
+                                if fb_chunk.get('done'):
+                                    prompt_tokens = fb_chunk.get('prompt_eval_count', 0)
+                                    used_model = fallback_model
+                                    break
+                                fb_content = fb_chunk.get('message', {}).get('content', '')
+                                if fb_content:
+                                    fb_full += fb_content
+                                    yield f"data: {json.dumps({'type': 'token', 'content': fb_content, 'ts': round(time.time() - start_time, 2)})}\n\n"
+                        if fb_full:
+                            full_response = f"[Usando {fallback_model} porque {model} no está disponible]\n\n{fb_full}"
+                            used_model = fallback_model
+                    except Exception as fb_err:
+                        logger.error("Fallback model also failed: %s", fb_err)
+                        error_msg = "❌ **Ningún modelo disponible**\n\n"
+                        error_msg += "No se pudo contactar ni el modelo cloud ni el local.\n"
+                        error_msg += "Verificá que Ollama esté corriendo: `ollama serve`"
+                        yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+                else:
+                    error_msg = f"⚠️ Error de conexión con **{model}**. Verificá tu conexión a internet."
+                    yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+            else:
+                # Generic error
+                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+
             # Always send done event so frontend doesn't hang
             elapsed = round(time.time() - start_time, 2)
-            yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model, 'is_local': used_model == base_model, 'error': str(e)})}\n\n"
-            # Still save what we have
+            yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model, 'is_local': used_model == base_model})}\n\n"
+            # Save what we have
             if full_response:
                 session_data['messages'].append({
                     'role': 'assistant',
@@ -2001,14 +2087,23 @@ def api_chat():
             used_model = model
             is_local = False
 
-    # Fallback model
+    # Fallback model — smart: don't try cloud fallback if connectivity failed
     if (response_text.startswith('Error:') or response_text.startswith('[ERROR]')) and fallback_model and fallback_model != model:
-        logger.info("Primary model '%s' failed, trying fallback '%s'", model, fallback_model)
-        result = process_ollama_response(fallback_model, session_data['messages'], OLLAMA_TOOLS)
-        response_text = result.get('response', '') if isinstance(result, dict) else result
-        prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
-        if not response_text.startswith('Error:') and not response_text.startswith('[ERROR]'):
-            response_text = f"[Fallback: {fallback_model}]\n\n{response_text}"
+        # If primary is cloud and failed with connectivity, check if fallback is also cloud
+        primary_is_cloud = is_cloud_model(model)
+        fallback_is_cloud = is_cloud_model(fallback_model)
+
+        if primary_is_cloud and fallback_is_cloud:
+            # Both cloud — skip fallback, show user-friendly error
+            logger.info("Primary cloud model failed and fallback is also cloud — skipping fallback")
+            response_text = "⚠️ **Sin conexión a internet**\n\nLos modelos cloud no están disponibles.\n\n**Sugerencias:**\n- Seleccioná un modelo local en el selector **Basic**\n- Marcá **Force** junto a Basic para usar solo modelos locales\n- Verificá tu conexión a internet"
+        else:
+            logger.info("Primary model '%s' failed, trying fallback '%s'", model, fallback_model)
+            result = process_ollama_response(fallback_model, session_data['messages'], OLLAMA_TOOLS)
+            response_text = result.get('response', '') if isinstance(result, dict) else result
+            prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
+            if not response_text.startswith('Error:') and not response_text.startswith('[ERROR]'):
+                response_text = f"[Fallback: {fallback_model}]\n\n{response_text}"
 
     session_data['messages'].append({
         'role': 'assistant',
