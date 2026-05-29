@@ -21,6 +21,8 @@ OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
 KEEP_ALIVE = os.environ.get('OLLAMA_KEEP_ALIVE', '5m')
 BASE_CHAT_MODEL = "gemma4:e4b"
 
+APP_VERSION = "1.8.0"
+
 
 def is_cloud_model(model_name):
     """Check if a model requires internet (cloud model)."""
@@ -863,7 +865,8 @@ def index():
                            cloud_models=cloud_models,
                            sessions=sessions,
                            current_model=session.get('model', ''),
-                           base_chat_model=BASE_CHAT_MODEL)
+                           base_chat_model=BASE_CHAT_MODEL,
+                           version=APP_VERSION)
 
 
 @app.route('/api/models')

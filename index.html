@@ -1069,47 +1069,54 @@
 
         // Add copy buttons to code blocks after rendering
         function addCopyButtons(container) {
-            container.querySelectorAll('pre').forEach(pre => {
-                if (pre.querySelector('.copy-btn')) return;
-                const btn = document.createElement('button');
-                btn.className = 'copy-btn';
-                btn.textContent = 'Copy';
-                btn.onclick = () => {
-                    const code = pre.querySelector('code');
-                    navigator.clipboard.writeText(code ? code.textContent : pre.textContent);
-                    btn.textContent = 'Copied!';
-                    setTimeout(() => btn.textContent = 'Copy', 2000);
-                };
-                pre.style.position = 'relative';
-                pre.appendChild(btn);
+            // Use rAF to ensure layout is complete before measuring scrollHeight
+            requestAnimationFrame(() => {
+                container.querySelectorAll('pre').forEach(pre => {
+                    if (pre.querySelector('.copy-btn')) return;
+                    const btn = document.createElement('button');
+                    btn.className = 'copy-btn';
+                    btn.textContent = 'Copy';
+                    btn.onclick = () => {
+                        const code = pre.querySelector('code');
+                        navigator.clipboard.writeText(code ? code.textContent : pre.textContent);
+                        btn.textContent = 'Copied!';
+                        setTimeout(() => btn.textContent = 'Copy', 2000);
+                    };
+                    pre.style.position = 'relative';
+                    pre.appendChild(btn);
 
-                // Add collapse toggle for long code blocks
-                if (pre.scrollHeight > 250) {
-                    const toggle = document.createElement('button');
-                    toggle.className = 'copy-btn';
-                    toggle.textContent = '▽ Show less';
-                    toggle.style.right = '70px';
-                    toggle.style.fontSize = '0.75rem';
-                    toggle.style.opacity = '0.9';
-                    toggle.style.background = 'var(--accent)';
-                    toggle.style.color = '#fff';
-                    toggle.onclick = () => {
-                        if (pre.dataset.expanded === 'true') {
+                    // Add collapse toggle for long code blocks
+                    // Use a small delay to ensure scrollHeight is accurate
+                    setTimeout(() => {
+                        const height = pre.scrollHeight;
+                        if (height > 250) {
+                            const toggle = document.createElement('button');
+                            toggle.className = 'copy-btn';
+                            toggle.textContent = '▽ Show more';
+                            toggle.style.right = '70px';
+                            toggle.style.fontSize = '0.75rem';
+                            toggle.style.opacity = '0.9';
+                            toggle.style.background = 'var(--accent)';
+                            toggle.style.color = '#fff';
+                            toggle.onclick = () => {
+                                if (pre.dataset.expanded === 'true') {
+                                    pre.style.maxHeight = '200px';
+                                    pre.dataset.expanded = 'false';
+                                    toggle.textContent = '▽ Show more';
+                                    pre.scrollTop = 0;
+                                } else {
+                                    pre.style.maxHeight = 'none';
+                                    pre.dataset.expanded = 'true';
+                                    toggle.textContent = '△ Show less';
+                                }
+                            };
+                            // Start collapsed
                             pre.style.maxHeight = '200px';
                             pre.dataset.expanded = 'false';
-                            toggle.textContent = '▽ Show more';
-                            pre.scrollTop = 0;
-                        } else {
-                            pre.style.maxHeight = 'none';
-                            pre.dataset.expanded = 'true';
-                            toggle.textContent = '△ Show less';
+                            pre.appendChild(toggle);
                         }
-                    };
-                    // Start collapsed
-                    pre.style.maxHeight = '200px';
-                    pre.dataset.expanded = 'false';
-                    pre.appendChild(toggle);
-                }
+                    }, 100);
+                });
             });
         }
 
@@ -1951,5 +1958,11 @@
             });
         }
     </script>
+
+    <!-- Version badge -->
+    <div style="position:fixed;bottom:4px;right:8px;font-size:0.65rem;color:var(--text-secondary);opacity:0.5;z-index:10;pointer-events:none;">
+        v{{ version }}
+    </div>
+
 </body>
 </html>
