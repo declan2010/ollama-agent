@@ -1916,10 +1916,11 @@ def api_chat_stream():
 
             # Always send done event so frontend doesn't hang
             elapsed = round(time.time() - start_time, 2)
-            # Get parameter size for the used model
+            # Get parameter size and file size for the used model
             used_model_info = get_model_info(used_model)
             used_param_size = used_model_info.get('parameter_size', '')
-            yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model, 'is_local': used_model == base_model, 'parameter_size': used_param_size})}\n\n"
+            used_size = used_model_info.get('size', 0)
+            yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model, 'is_local': used_model == base_model, 'parameter_size': used_param_size, 'size': used_size})}\n\n"
             # Save what we have
             if full_response:
                 session_data['messages'].append({
