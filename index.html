@@ -1267,7 +1267,7 @@
         }
 
         // Update badge to reflect the actually used model (not the selected one)
-        function updateBadgeForUsedModel(usedModel, isLocal, paramSize) {
+        function updateBadgeForUsedModel(usedModel, isLocal, paramSize, fileSize) {
             const badge = document.getElementById('modelInfoBadge');
             if (!badge) return;
             
@@ -1280,16 +1280,33 @@
                     .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
             }
             
+            function formatFileSize(bytes) {
+                if (bytes >= 1099511627776) return (bytes / 1099511627776).toFixed(2) + 'TB';
+                if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + 'GB';
+                if (bytes >= 1048576) return (bytes / 1048576).toFixed(0) + 'MB';
+                if (bytes >= 1024) return (bytes / 1024).toFixed(0) + 'KB';
+                return bytes + 'B';
+            }
+            
             const isCloud = usedModel.includes(':cloud') || usedModel.includes('-cloud');
             if (isCloud) {
                 badge.className = 'model-info-badge loaded';
                 badge.textContent = '● Cloud';
+                // For cloud, show parameter size
+                if (paramSize && !/^\d{10,}$/.test(paramSize)) {
+                    badge.textContent += ` [${formatParams(paramSize)}]`;
+                }
             } else {
                 badge.className = 'model-info-badge loaded';
                 badge.textContent = '● Loaded';
-            }
-            if (paramSize && !/^\d{10,}$/.test(paramSize)) {
-                badge.textContent += ` [${formatParams(paramSize)}]`;
+                // For local, show file size
+                if (fileSize > 0) {
+                    badge.textContent += ` ${formatFileSize(fileSize)}`;
+                }
+                // Also show parameter size if available
+                if (paramSize && !/^\d{10,}$/.test(paramSize)) {
+                    badge.textContent += ` [${formatParams(paramSize)}]`;
+                }
             }
             badge.style.display = 'inline-block';
         }
@@ -1971,7 +1988,7 @@
                                 if (data.used_model) {
                                     window.lastUsedModel = data.used_model;
                                     window.lastUsedIsLocal = data.is_local;
-                                    updateBadgeForUsedModel(data.used_model, data.is_local, data.parameter_size || '');
+                                    updateBadgeForUsedModel(data.used_model, data.is_local, data.parameter_size || '', data.size || 0);
                                 }
                                 // Show which model responded (always visible, color-coded)
                                 if (data.used_model) {
