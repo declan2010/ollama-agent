@@ -1356,7 +1356,11 @@ def api_chat_stream():
                     base_lower = base_stripped.lower()
                     is_weak_answer = any(p in base_lower for p in weak_answer_patterns)
 
-                    if force_basic or (base_stripped and len(base_stripped) >= 10 and not looks_like_tool_attempt and not is_weak_answer):
+                    # Check if response is valid - for short greetings allow shorter responses
+                    is_greeting = any(kw in user_message.lower() for kw in ['hola', 'buenos días', 'buenas tardes', 'buenas noches', 'hey', 'saludos', 'qué tal', 'cómo estás', 'hello', 'hi'])
+                    min_length = 3 if is_greeting else 10
+                    
+                    if force_basic or (base_stripped and len(base_stripped) >= min_length and not looks_like_tool_attempt and not is_weak_answer):
                         # Base model succeeded - use its response
                         full_response = base_full_response
                         prompt_tokens = base_prompt_tokens
@@ -1365,9 +1369,9 @@ def api_chat_stream():
                         logger.info("Base model %s succeeded (response len=%d, force_basic=%s)", base_model, len(base_stripped), force_basic)
                     else:
                         # Escalate to advanced model
-                        reason = 'weak_answer' if is_weak_answer else ('tool_attempt' if looks_like_tool_attempt else 'too_short')
-                        logger.info("Base model %s response insufficient (len=%d, tool_attempt=%s, weak=%s, reason=%s), escalating to %s",
-                                    base_model, len(base_stripped), looks_like_tool_attempt, is_weak_answer, reason, model)
+                        reason = 'weak_answer' if is_weak_answer else ('tool_attempt' if looks_like_tool_attempt else ('too_short' if len(base_stripped) < min_length else 'unknown'))
+                        logger.info("Base model %s response insufficient (len=%d, tool_attempt=%s, weak=%s, reason=%s, greeting=%s), escalating to %s",
+                                    base_model, len(base_stripped), looks_like_tool_attempt, is_weak_answer, reason, is_greeting, model)
                         yield f"data: {json.dumps({'type': 'escalated', 'base_model': base_model, 'advanced_model': model})}\n\n"
                 except Exception as base_err:
                     logger.warning("Base model %s failed: %s, escalating to %s", base_model, base_err, model)
