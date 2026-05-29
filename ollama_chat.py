@@ -1406,7 +1406,10 @@ def api_chat_stream():
 
                 elapsed = round(time.time() - start_time, 2)
                 is_local = (used_model == base_model)
-                yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'eval_count': base_eval_count, 'elapsed': elapsed, 'used_model': used_model, 'is_local': is_local})}\n\n"
+                # Get parameter size for the used model
+                used_model_info = get_model_info(used_model)
+                used_param_size = used_model_info.get('parameter_size', '')
+                yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'eval_count': base_eval_count, 'elapsed': elapsed, 'used_model': used_model, 'is_local': is_local, 'parameter_size': used_param_size})}\n\n"
                 return
 
             # --- Advanced model flow (with tools) ---
@@ -1908,7 +1911,10 @@ def api_chat_stream():
 
             # Always send done event so frontend doesn't hang
             elapsed = round(time.time() - start_time, 2)
-            yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model, 'is_local': used_model == base_model})}\n\n"
+            # Get parameter size for the used model
+            used_model_info = get_model_info(used_model)
+            used_param_size = used_model_info.get('parameter_size', '')
+            yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model, 'is_local': used_model == base_model, 'parameter_size': used_param_size})}\n\n"
             # Save what we have
             if full_response:
                 session_data['messages'].append({
@@ -1947,7 +1953,10 @@ def api_chat_stream():
         # Send completion event
         elapsed = round(time.time() - start_time, 2)
         is_local = (used_model == base_model)
-        yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'eval_count': eval_count, 'elapsed': elapsed, 'used_model': used_model, 'is_local': is_local})}\n\n"
+        # Get parameter size for the used model
+        used_model_info = get_model_info(used_model)
+        used_param_size = used_model_info.get('parameter_size', '')
+        yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'eval_count': eval_count, 'elapsed': elapsed, 'used_model': used_model, 'is_local': is_local, 'parameter_size': used_param_size})}\n\n"
 
     return Response(generate(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})

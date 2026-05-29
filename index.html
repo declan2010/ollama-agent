@@ -1943,6 +1943,33 @@
                                         lastMsg.appendChild(ts);
                                     }
                                 }
+                                // Update badge based on actually used model (not selected model)
+                                if (data.used_model) {
+                                    const badge = document.getElementById('modelInfoBadge');
+                                    const isCloud = data.used_model.includes(':cloud') || data.used_model.includes('-cloud');
+                                    const paramSize = data.parameter_size || '';
+                                    
+                                    function formatParams(sizeStr) {
+                                        if (!sizeStr) return '';
+                                        return sizeStr
+                                            .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
+                                            .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
+                                            .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
+                                            .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
+                                    }
+                                    
+                                    if (isCloud) {
+                                        badge.className = 'model-info-badge loaded';
+                                        badge.textContent = '● Cloud';
+                                    } else {
+                                        badge.className = 'model-info-badge loaded';
+                                        badge.textContent = '● Loaded';
+                                    }
+                                    if (paramSize && !/^\d{10,}$/.test(paramSize)) {
+                                        badge.textContent += ` [${formatParams(paramSize)}]`;
+                                    }
+                                    badge.style.display = 'inline-block';
+                                }
                                 // Show which model responded (always visible, color-coded)
                                 if (data.used_model) {
                                     const lastMsg = chatArea.querySelector('.message:last-child .message-content');
