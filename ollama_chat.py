@@ -1611,6 +1611,11 @@ def api_chat_stream():
                                                     result = execute_write_command(cmd, current_chat_id)
                                                 else:
                                                     result = execute_local_command(cmd)
+                                                # Emit html_preview if result contains preview marker
+                                                if '[HTML_PREVIEW:' in result:
+                                                    matches = re.findall(r'\[HTML_PREVIEW:([^\]]+)\]', result)
+                                                    for path in matches:
+                                                        yield f"data: {json.dumps({'type': 'html_preview', 'path': path})}\n\n"
                                                 followup_messages.append({'role': 'tool', 'content': result, 'tool_call_id': tc_id})
                                             elif tc_name == 'web_search':
                                                 q = tc_args.get('query', '')
@@ -1716,6 +1721,11 @@ def api_chat_stream():
                                                     tr_content = execute_write_command(cmd, current_chat_id)
                                             else:
                                                 tr_content = execute_local_command(cmd)
+                                                # Emit html_preview if result contains preview marker
+                                                if '[HTML_PREVIEW:' in tr_content:
+                                                    matches = re.findall(r'\[HTML_PREVIEW:([^\]]+)\]', tr_content)
+                                                    for path in matches:
+                                                        yield f"data: {json.dumps({'type': 'html_preview', 'path': path})}\n\n"
                                             followup_messages.append({'role': 'tool', 'content': tr_content, 'tool_call_id': tc_id})
                                         else:
                                             followup_messages.append({'role': 'tool', 'content': f'Unknown tool: {tc_name}', 'tool_call_id': tc_id})
