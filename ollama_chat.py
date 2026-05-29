@@ -1736,7 +1736,7 @@ def api_chat_stream():
                         # Smart fallback: skip cloud fallback if primary is cloud and failed
                         if is_cloud_model(model) and is_cloud_model(fallback_model):
                             logger.info("Primary cloud model empty response and fallback is also cloud — showing connectivity error")
-                            full_response = "⚠️ **Sin conexión a internet**\n\nLos modelos cloud no están disponibles en este momento.\n\n**Sugerencias:**\n- Seleccioná un modelo local en el selector **Basic**\n- Marcá **Force** junto a Basic para usar solo modelos locales\n- Verificá tu conexión a internet"
+                            full_response = "⚠️ **No internet connection**\n\nCloud models are currently unavailable.\n\n**Suggestions:**\n- Select a local model in the **Basic** dropdown\n- Check the **Force** checkbox next to Basic to use only local models\n- Check your internet connection"
                         else:
                             logger.info("Primary model '%s' empty response, trying fallback '%s'", model, fallback_model)
                             yield f"data: {json.dumps({'type': 'model_routing', 'route': 'fallback', 'model': fallback_model, 'reason': 'empty_response'})}\n\n"
@@ -1779,15 +1779,15 @@ def api_chat_stream():
                 # Advanced/cloud model failed due to connectivity
                 if both_cloud:
                     # Both primary and fallback are cloud — no point trying fallback
-                    error_msg = "⚠️ **Sin conexión a internet**\n\n"
-                    error_msg += "Los modelos cloud no están disponibles en este momento.\n\n"
-                    error_msg += "**Sugerencias:**\n"
-                    error_msg += "- Seleccioná un modelo local en el selector **Basic**\n"
-                    error_msg += "- Marcá **Force** junto a Basic para usar solo modelos locales\n"
-                    error_msg += "- Verificá tu conexión a internet"
+                    error_msg = "⚠️ **No internet connection**\n\n"
+                    error_msg += "Cloud models are currently unavailable.\n\n"
+                    error_msg += "**Suggestions:**\n"
+                    error_msg += "- Select a local model in the **Basic** dropdown\n"
+                    error_msg += "- Check the **Force** checkbox next to Basic to use only local models\n"
+                    error_msg += "- Check your internet connection"
                 elif fallback_model and not is_cloud_model(fallback_model):
                     # Primary cloud failed, but fallback is local — try it
-                    error_msg = f"⚠️ Modelo cloud **{model}** no disponible (sin conexión). Intentando con modelo local **{fallback_model}**...\n\n"
+                    error_msg = f"⚠️ Cloud model **{model}** unavailable (no connection). Trying local model **{fallback_model}**...\n\n"
                     yield f"data: {json.dumps({'type': 'token', 'content': error_msg, 'ts': round(time.time() - start_time, 2)})}\n\n"
                     try:
                         fb_payload = payload.copy() if 'payload' in dir() else {'messages': session_data['messages']}
@@ -1819,12 +1819,12 @@ def api_chat_stream():
                             used_model = fallback_model
                     except Exception as fb_err:
                         logger.error("Fallback model also failed: %s", fb_err)
-                        error_msg = "❌ **Ningún modelo disponible**\n\n"
-                        error_msg += "No se pudo contactar ni el modelo cloud ni el local.\n"
-                        error_msg += "Verificá que Ollama esté corriendo: `ollama serve`"
+                        error_msg = "❌ **No models available**\n\n"
+                        error_msg += "Could not reach either the cloud or local model.\n"
+                        error_msg += "Make sure Ollama is running: `ollama serve`"
                         yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
                 else:
-                    error_msg = f"⚠️ Error de conexión con **{model}**. Verificá tu conexión a internet."
+                    error_msg = f"⚠️ Connection error with **{model}**. Check your internet connection."
                     yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
             else:
                 # Generic error
@@ -2096,7 +2096,7 @@ def api_chat():
         if primary_is_cloud and fallback_is_cloud:
             # Both cloud — skip fallback, show user-friendly error
             logger.info("Primary cloud model failed and fallback is also cloud — skipping fallback")
-            response_text = "⚠️ **Sin conexión a internet**\n\nLos modelos cloud no están disponibles.\n\n**Sugerencias:**\n- Seleccioná un modelo local en el selector **Basic**\n- Marcá **Force** junto a Basic para usar solo modelos locales\n- Verificá tu conexión a internet"
+            response_text = "⚠️ **No internet connection**\n\nCloud models are currently unavailable.\n\n**Suggestions:**\n- Select a local model in the **Basic** dropdown\n- Check the **Force** checkbox next to Basic to use only local models\n- Check your internet connection"
         else:
             logger.info("Primary model '%s' failed, trying fallback '%s'", model, fallback_model)
             result = process_ollama_response(fallback_model, session_data['messages'], OLLAMA_TOOLS)
