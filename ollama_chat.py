@@ -830,12 +830,16 @@ def index():
     # Separate models into local and cloud for template
     all_models = get_ollama_models()
     local_models = [m for m in all_models if ':cloud' not in m and '-cloud' not in m and not m.startswith('x/') and 'embed' not in m.lower()]
+    cloud_models = [m for m in all_models if ':cloud' in m or '-cloud' in m]
     if not local_models:
         local_models = ['gemma4:e4b']  # fallback default
+    if not cloud_models:
+        cloud_models = all_models  # fallback: show all if no cloud models
 
     return render_template('index.html',
                            models=all_models,
                            local_models=local_models,
+                           cloud_models=cloud_models,
                            sessions=sessions,
                            current_model=session.get('model', ''),
                            base_chat_model=BASE_CHAT_MODEL)

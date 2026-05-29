@@ -845,14 +845,14 @@
                     <label for="forceBasic" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Basic model, never escalate to Agent">Force</label>
                 </div>
                 <div class="model-selector">
-                    <label>Agent:</label>
+                    <label>Advanced:</label>
                     <select id="modelSelect">
-                        {% for model in models %}
+                        {% for model in cloud_models %}
                         <option value="{{ model }}" {% if model == current_model %}selected{% endif %}>{{ model }}</option>
                         {% endfor %}
                     </select>
-                    <input type="checkbox" id="forceAdvanced" title="Force Agent model with tools" style="cursor:pointer;">
-                    <label for="forceAdvanced" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Agent model with tools">Force</label>
+                    <input type="checkbox" id="forceAdvanced" title="Force Advanced model with tools" style="cursor:pointer;">
+                    <label for="forceAdvanced" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Advanced model with tools">Force</label>
                 </div>
                 <div class="model-selector">
                     <label>Backup:</label>
