@@ -1292,13 +1292,28 @@
                     .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
             }
             
+            function extractParamsFromModelName(modelName) {
+                // Try to extract parameter size from model name for cloud models
+                // e.g., "llama3.2:1b" → "1B", "gemma4:26b" → "26B", "minimax-m2.7:cloud" → "2.7B"
+                var match = modelName.match(/(\d+(?:\.\d+)?)\s*[Bb]\b/);
+                if (match) return match[1] + 'B';
+                // Also try patterns like "2.7" in "m2.7" or "120b" 
+                match = modelName.match(/[Mm](\d+(?:\.\d+)?)/);
+                if (match) return match[1] + 'B';
+                match = modelName.match(/(\d+)\s*[Bb]/);
+                if (match) return match[1] + 'B';
+                return '';
+            }
+            
             var isCloud = usedModel.includes(':cloud') || usedModel.includes('-cloud');
             var text = '';
             
             if (isCloud) {
                 text = '● Cloud';
-                if (pSize && !/^\d{10,}$/.test(pSize)) {
-                    text += ' [' + formatParams(pSize) + ']';
+                // For cloud, try to get param size from name if not provided by backend
+                var cloudParam = pSize || extractParamsFromModelName(usedModel);
+                if (cloudParam && !/^\d{10,}$/.test(cloudParam)) {
+                    text += ' [' + formatParams(cloudParam) + ']';
                 }
             } else {
                 text = '● Loaded';
