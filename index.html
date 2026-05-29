@@ -2022,8 +2022,9 @@
                                     const finalRoute = data.is_local ? 'basic' : 'advanced';
                                     highlightActiveModelSelect(finalRoute, data.used_model);
                                 }
-                                // Update model status after response (model is now loaded)
-                                checkModelStatus();
+                                // Don't call checkModelStatus here - it overwrites the badge with selected model info
+                                // The badge was already updated by updateBadgeForUsedModel above
+                                // checkModelStatus();
                             }
                         } catch (parseErr) {
                             // Skip unparseable lines
