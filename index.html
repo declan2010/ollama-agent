@@ -1290,7 +1290,13 @@
                     const sizeMB = Math.round(sizeBytes / (1024 * 1024));
                     badge.textContent += ` ${sizeMB > 1024 ? (sizeMB / 1024).toFixed(1) + 'GB' : sizeMB + 'MB'}`;
                 } else if (paramSize) {
-                    badge.textContent += ` ${paramSize}`;
+                    // Normalize parameter size to billions (B)
+                    const normalized = paramSize
+                        .replace(/(\d+(?:\.\d+)?)\s*M/i, (match, num) => (parseFloat(num) / 1000).toFixed(2) + 'B')
+                        .replace(/(\d+(?:\.\d+)?)\s*K/i, (match, num) => (parseFloat(num) / 1000000).toFixed(4) + 'B')
+                        .replace(/(\d+(?:\.\d+)?)\s*T/i, (match, num) => (parseFloat(num) * 1000).toFixed(0) + 'B')
+                        .replace(/(\d+(?:\.\d+)?)\s*B/i, '$1B');
+                    badge.textContent += ` ${normalized}`;
                 }
             } catch (e) {
                 badge.style.display = 'none';
