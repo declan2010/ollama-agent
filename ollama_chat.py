@@ -1519,10 +1519,23 @@ def api_chat_stream():
                             # Check for HTML preview markers in tool results and notify frontend
                             for tr in tool_results:
                                 if tr.get('content') and '[HTML_PREVIEW:' in tr['content']:
-                                    import re
                                     matches = re.findall(r'\[HTML_PREVIEW:([^\]]+)\]', tr['content'])
                                     for path in matches:
                                         yield f"data: {json.dumps({'type': 'html_preview', 'path': path})}\n\n"
+                            # Also check write tool calls that wrote HTML files - emit preview
+                            for i_tc, tc in enumerate(merged_tool_calls):
+                                func_args = parse_tool_args(tc.get('function', {}).get('arguments', {}))
+                                cmd = func_args.get('command', '')
+                                if tc.get('function', {}).get('name') == 'local_command' and is_write_command(cmd):
+                                    # Extract file path from the write command
+                                    import re
+                                    m = re.search(r'>([^<]+)\s*$', cmd.strip())
+                                    if not m:
+                                        m = re.search(r'cat\s+>([^\s]+)', cmd)
+                                    if m:
+                                        written_path = m.group(1).strip().strip('\'')
+                                        if written_path.endswith('.html') or written_path.endswith('.htm'):
+                                            yield f"data: {json.dumps({'type': 'html_preview', 'path': written_path})}\n\n"
                             # Send tool results back to Ollama for final response
                             followup_messages = []
                             for msg in session_data['messages']:
