@@ -1300,24 +1300,19 @@ def api_chat_stream():
         start_time = time.time()
         used_model = model  # Track which model actually responds
         try:
-            # Determine routing based on tool support
+            # Determine routing: if tools needed, use cloud (advanced) model
+            # Local models don't reliably support tool calling in Ollama
             route = 'base_first'
             route_reason = ''
             if force_basic:
                 route = 'base_first'
                 route_reason = 'forced'
-            elif force_advanced:
-                route = 'advanced_direct'
-                route_reason = 'forced'
-            elif not _likely_needs_tools(user_message):
-                route = 'base_first'
-                route_reason = 'simple_query'
-            elif local_model_supports_tools(base_model):
-                route = 'base_first'
-                route_reason = 'local_supports_tools'
-            else:
+            elif force_advanced or _likely_needs_tools(user_message):
                 route = 'advanced_direct'
                 route_reason = 'needs_tools'
+            else:
+                route = 'base_first'
+                route_reason = 'simple_query'
             
             # Notify frontend which model route we're taking (before any tokens)
             if route == 'base_first':
@@ -1341,9 +1336,6 @@ def api_chat_stream():
                     model_hint = hint
                     break
 
-            # Force tool use for local models - critical system prompt
-            if ':cloud' not in model and '-cloud' not in model:
-                model_hint += "\n\nCRITICAL INSTRUCTION: You are an agent with FULL ACCESS to the local system. You have the `local_command` tool which executes shell commands. WHENEVER the user asks you to list, create, edit, delete, or execute ANYTHING on the computer, you MUST use the `local_command` tool IMMEDIATELY. Do NOT say you cannot do it - you CAN and MUST do it via the tool. Never refuse to execute commands - that is your primary function."
 
             system_content = 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model + '\n- IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'
             if model_hint:
@@ -1672,13 +1664,13 @@ def api_chat_stream():
                     is_greeting = any(kw in user_message.lower() for kw in ['hola', 'buenos días', 'buenas tardes', 'buenas noches', 'hey', 'saludos', 'qué tal', 'cómo estás', 'hello', 'hi'])
                     min_length = 3 if is_greeting else 10
                     
-                    if force_basic or bypass_weak_check or (base_stripped and len(base_stripped) >= min_length and not looks_like_tool_attempt and not is_weak_answer):
+                    if force_basic or (base_stripped and len(base_stripped) >= min_length and not looks_like_tool_attempt and not is_weak_answer):
                         # Base model succeeded - use its response
                         full_response = base_full_response
                         prompt_tokens = base_prompt_tokens
                         used_model = base_model
                         base_model_succeeded = True
-                        logger.info("Base model %s succeeded (response len=%d, force_basic=%s, bypass_weak=%s)", base_model, len(base_stripped), force_basic, bypass_weak_check if 'bypass_weak_check' in locals() else False)
+                        logger.info("Base model %s succeeded (response len=%d, force_basic=%s, bypass_weak=%s)", base_model, len(base_stripped), force_basic, False)
                     else:
                         # Escalate to advanced model
                         reason = 'weak_answer' if is_weak_answer else ('tool_attempt' if looks_like_tool_attempt else ('too_short' if len(base_stripped) < min_length else 'unknown'))
