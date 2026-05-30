@@ -1431,6 +1431,13 @@ def api_chat_stream():
                         }
                     },
                 ]
+                
+                # For models with basic template (like gemma4), inject tools into system prompt
+                if not is_cloud_model(base_model):
+                    tools_json = json.dumps(tools, indent=2)
+                    system_content += f"\n\nYou have access to the following tools. When you need to use a tool, respond with a JSON object in this EXACT format:\n{{'tool': 'tool_name', 'arguments': {{...}}}}\n\nAvailable tools:\n{tools_json}\n\nIMPORTANT: If the user asks you to execute a command or get information that requires a tool, you MUST use the tool by responding with the JSON format above. Do NOT say you cannot do it."
+                    # Update the system message with injected tools
+                    api_messages[0]['content'] = system_content
 
             # If user asks to analyze files, force tool use (not saved to session)
             _force_keywords = ['analiza', 'revisa', 'explora', 'examina', 'inspecciona',
@@ -1453,6 +1460,7 @@ def api_chat_stream():
             should_use_base = force_basic or not needs_tools or (needs_tools and local_supports_tools)
             
             if should_use_base and not force_advanced:
+                bypass_weak_check = False  # Initialize flag
                 try:
                     import urllib.request as _urllib_base
                     
@@ -1513,9 +1521,120 @@ def api_chat_stream():
 
                     # Evaluate base model response quality
                     base_stripped = base_full_response.strip()
+                    # Check if response is a JSON tool call (for models with basic template)
+                    tool_call_json = None
+                    try:
+                        if base_stripped.startswith('{'):
+                            potential_json = json.loads(base_stripped)
+                            if 'tool' in potential_json and 'arguments' in potential_json:
+                                tool_call_json = potential_json
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                    
                     # Check if response tried to use a tool but couldn't (common patterns)
                     tool_attempt_patterns = ['local_command', 'web_search', 'fetch_article', 'tool_call', '<tool>', '[tool]']
                     looks_like_tool_attempt = any(p in base_stripped for p in tool_attempt_patterns)
+
+                    # If we got a JSON tool call, execute it
+                    if tool_call_json:
+                        logger.info("Base model returned JSON tool call: %s", tool_call_json.get('tool'))
+                        # Execute the tool
+                        tool_name = tool_call_json.get('tool')
+                        tool_args = tool_call_json.get('arguments', {})
+                        tool_result = None
+                        tool_error = None
+                        
+                        if tool_name == 'local_command':
+                            command = tool_args.get('command', '')
+                            allowed, why = check_command_allowed(command)
+                            if not allowed:
+                                tool_error = why
+                            else:
+                                try:
+                                    stdout, stderr, rc = run_command_sandboxed(command)
+                                    if rc != 0 and stderr:
+                                        tool_result = f"Exit code {rc}: {stderr}"
+                                    else:
+                                        tool_result = stdout if stdout else "(no output)"
+                                except Exception as e:
+                                    tool_error = str(e)
+                        elif tool_name == 'execute_write_command':
+                            command = tool_args.get('command', '')
+                            try:
+                                stdout, stderr, rc = run_command_sandboxed(command)
+                                if rc != 0 and stderr:
+                                    tool_result = f"Exit code {rc}: {stderr}"
+                                else:
+                                    tool_result = stdout if stdout else "(no output)"
+                            except Exception as e:
+                                tool_error = str(e)
+                        elif tool_name == 'web_search':
+                            query = tool_args.get('query', '')
+                            try:
+                                tool_result = web_search(query)
+                            except Exception as e:
+                                tool_error = str(e)
+                        elif tool_name == 'fetch_article':
+                            url = tool_args.get('url', '')
+                            try:
+                                tool_result = fetch_article(url)
+                            except Exception as e:
+                                tool_error = str(e)
+                        
+                        # Send result back to model
+                        if tool_result is not None or tool_error is not None:
+                            result_msg = f"Tool '{tool_name}' result: "
+                            if tool_error:
+                                result_msg += f"ERROR: {tool_error}"
+                            else:
+                                result_msg += str(tool_result)
+                            
+                            # Continue the conversation with the tool result
+                            messages_with_result = base_api_messages + [
+                                {'role': 'assistant', 'content': base_stripped},
+                                {'role': 'system', 'content': result_msg}
+                            ]
+                            
+                            result_payload = {
+                                'model': base_model,
+                                'messages': messages_with_result,
+                                'stream': True,
+                                'keep_alive': KEEP_ALIVE,
+                            }
+                            
+                            result_data_bytes = json.dumps(result_payload).encode('utf-8')
+                            result_req = _urllib_base.Request(
+                                f'{OLLAMA_BASE_URL}/api/chat',
+                                data=result_data_bytes,
+                                headers={'Content-Type': 'application/json'}
+                            )
+                            
+                            result_full_response = ""
+                            with _urllib_base.urlopen(result_req) as result_response:
+                                for result_line in result_response:
+                                    result_line = result_line.decode('utf-8').strip()
+                                    if not result_line:
+                                        continue
+                                    try:
+                                        result_chunk = json.loads(result_line)
+                                    except json.JSONDecodeError:
+                                        continue
+                                    if result_chunk.get('done'):
+                                        break
+                                    result_content = result_chunk.get('message', {}).get('content', '')
+                                    if result_content:
+                                        result_full_response += result_content
+                                        sse_data = json.dumps({'type': 'token', 'content': result_content, 'ts': round(time.time() - start_time, 2)})
+                                        yield f"data: {sse_data}\n\n"
+                            
+                            base_full_response += "\n" + result_full_response
+                            base_model_succeeded = True
+                            used_model = base_model
+                            base_eval_count = len(result_full_response.split())
+                            # Flag to bypass weak answer check when tool call succeeded
+                            bypass_weak_check = True
+                        else:
+                            bypass_weak_check = False
 
                     # Check if response is a weak/ignorant answer that should escalate
                     weak_answer_patterns = [
@@ -1553,13 +1672,13 @@ def api_chat_stream():
                     is_greeting = any(kw in user_message.lower() for kw in ['hola', 'buenos días', 'buenas tardes', 'buenas noches', 'hey', 'saludos', 'qué tal', 'cómo estás', 'hello', 'hi'])
                     min_length = 3 if is_greeting else 10
                     
-                    if force_basic or (base_stripped and len(base_stripped) >= min_length and not looks_like_tool_attempt and not is_weak_answer):
+                    if force_basic or bypass_weak_check or (base_stripped and len(base_stripped) >= min_length and not looks_like_tool_attempt and not is_weak_answer):
                         # Base model succeeded - use its response
                         full_response = base_full_response
                         prompt_tokens = base_prompt_tokens
                         used_model = base_model
                         base_model_succeeded = True
-                        logger.info("Base model %s succeeded (response len=%d, force_basic=%s)", base_model, len(base_stripped), force_basic)
+                        logger.info("Base model %s succeeded (response len=%d, force_basic=%s, bypass_weak=%s)", base_model, len(base_stripped), force_basic, bypass_weak_check if 'bypass_weak_check' in locals() else False)
                     else:
                         # Escalate to advanced model
                         reason = 'weak_answer' if is_weak_answer else ('tool_attempt' if looks_like_tool_attempt else ('too_short' if len(base_stripped) < min_length else 'unknown'))
