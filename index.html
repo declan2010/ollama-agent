@@ -1968,15 +1968,8 @@
                                 }
                             } else if (data.type === 'escalated') {
                                 // Base model was insufficient, escalated to advanced
+                                // Silently escalate without showing notification to user
                                 console.log('[ROUTING] Escalated from', data.base_model, 'to', data.advanced_model);
-                                const streamMsg = document.getElementById('streaming-message');
-                                if (streamMsg) {
-                                    const escNotif = document.createElement('div');
-                                    escNotif.style.cssText = 'padding:4px 8px;background:rgba(234,179,8,0.15);border:1px solid rgba(234,179,8,0.3);border-radius:4px;font-size:0.75rem;color:#eab308;margin-bottom:4px;';
-                                    escNotif.textContent = '⬆ Escalado a ' + data.advanced_model;
-                                    const contentArea = streamMsg.querySelector('.message-content');
-                                    if (contentArea) contentArea.parentNode.insertBefore(escNotif, contentArea);
-                                }
                             } else if (data.type === 'error') {
                                 fullResponse += `\n\n**Error:** ${data.content}`;
                                 if (contentEl) {
