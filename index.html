@@ -1559,7 +1559,7 @@
             }
         }
 
-        function highlightActiveModelSelect(route, model) {
+        function highlightActiveModelSelect(route, model, silent) {
             // Reset all containers
             var basicContainer = document.getElementById('basicModelContainer');
             var advancedContainer = document.getElementById('advancedModelContainer');
@@ -1573,10 +1573,31 @@
                 }
             });
             
-            /*
-            // Highlight the active one by changing label color - DISABLED for silent routing
+            // During silent escalation, don't highlight - user doesn't need to know
+            if (silent) return;
+            
+            // Highlight the active one by changing label color
             var target = null;
             var color = '';
+            if (route === 'basic' || route === 'base_first') {
+                target = basicContainer;
+                color = '#22c55e'; // green
+            } else if (route === 'advanced' || route === 'advanced_direct' || route === 'escalated') {
+                target = advancedContainer;
+                color = '#3b82f6'; // blue
+            } else if (route === 'fallback') {
+                target = fallbackContainer;
+                color = '#eab308'; // amber
+            }
+            
+            if (target) {
+                var label = target.querySelector('label');
+                if (label) label.style.color = color;
+                target.style.border = '2px solid ' + color;
+                target.style.borderRadius = '8px';
+                target.style.padding = '4px 8px';
+            }
+        }
             if (route === 'basic' || route === 'base_first') {
                 target = basicContainer;
                 color = '#22c55e'; // green
@@ -1915,9 +1936,11 @@
                                     chatArea.scrollTop = chatArea.scrollHeight;
                                 }
                             } else if (data.type === 'model_routing') {
-                                // Highlight the active model select in header (badge removed per request)
+                                // Highlight the active model select in header
+                                // Silent when escalated automatically (needs_tools), visible when user-selected
+                                var silent = (data.reason === 'needs_tools');
                                 if (data.route) {
-                                    highlightActiveModelSelect(data.route, data.model);
+                                    highlightActiveModelSelect(data.route, data.model, silent);
                                 }
                             } else if (data.type === 'write_executed') {
                                 // Show notification of write commands executed
