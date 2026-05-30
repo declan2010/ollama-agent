@@ -624,6 +624,11 @@ def send_to_ollama(model, messages, tools=None, stream=False):
         if tools:
             payload['tools'] = tools
 
+        # Disable reasoning for local models to fix tool calling
+        # Models with thinking mode generate non-standard 'reasoning' field that breaks tool call parsing
+        if ':cloud' not in model and '-cloud' not in model:
+            payload['reasoning_effort'] = 'none'
+
         data = json.dumps(payload).encode('utf-8')
         req = urllib.request.Request(
             f'{OLLAMA_BASE_URL}/api/chat',
