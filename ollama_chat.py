@@ -154,6 +154,7 @@ SAFE_COMMANDS = {
     'printf': {'flags': set(), 'allow_args': True},  # printf for reading (write with > handled separately)
     'xdg-open': {'flags': set(), 'allow_args': True},  # intercepted - opens HTML in preview, not browser
     'open': {'flags': set(), 'allow_args': True},      # macOS equivalent of xdg-open
+    'ollama': {'flags': {'list', 'show', 'ps', 'rm', 'serve', 'stop', 'status'}, 'allow_args': True},  # Ollama management commands
 }
 
 
