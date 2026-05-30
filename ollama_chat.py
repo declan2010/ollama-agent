@@ -1358,6 +1358,80 @@ def api_chat_stream():
                     'content': msg['content']
                 })
 
+            # Define tools for models that support them
+            tools = []
+            if local_model_supports_tools(base_model) or ':cloud' in model or '-cloud' in model:
+                tools = [
+                    {
+                        'type': 'function',
+                        'function': {
+                            'name': 'local_command',
+                            'description': 'Execute a validated local system command (read-only, no shell). Returns output as string. Examples: ls -la, cat file.txt, pwd, df -h, ps aux. For write operations, use the execute_write_command function (not this tool).',
+                            'parameters': {
+                                'type': 'object',
+                                'properties': {
+                                    'command': {
+                                        'type': 'string',
+                                        'description': 'The command to execute. Must be a single command with arguments. No shell metacharacters (|, ;, &&, $(), backticks). No sudo.',
+                                    }
+                                },
+                                'required': ['command'],
+                            },
+                        }
+                    },
+                    {
+                        'type': 'function',
+                        'function': {
+                            'name': 'execute_write_command',
+                            'description': 'Execute a write command (requires user permission). Returns output as string.',
+                            'parameters': {
+                                'type': 'object',
+                                'properties': {
+                                    'command': {
+                                        'type': 'string',
+                                        'description': 'The write command to execute. Examples: cat > file.txt, sed -i, echo "text" > file.txt.',
+                                    }
+                                },
+                                'required': ['command'],
+                            },
+                        }
+                    },
+                    {
+                        'type': 'function',
+                        'function': {
+                            'name': 'web_search',
+                            'description': 'Search the web for information. Returns search results.',
+                            'parameters': {
+                                'type': 'object',
+                                'properties': {
+                                    'query': {
+                                        'type': 'string',
+                                        'description': 'The search query.',
+                                    }
+                                },
+                                'required': ['query'],
+                            },
+                        }
+                    },
+                    {
+                        'type': 'function',
+                        'function': {
+                            'name': 'fetch_article',
+                            'description': 'Fetch and extract text content from a web page URL.',
+                            'parameters': {
+                                'type': 'object',
+                                'properties': {
+                                    'url': {
+                                        'type': 'string',
+                                        'description': 'The URL to fetch.',
+                                    }
+                                },
+                                'required': ['url'],
+                            },
+                        }
+                    },
+                ]
+
             # If user asks to analyze files, force tool use (not saved to session)
             _force_keywords = ['analiza', 'revisa', 'explora', 'examina', 'inspecciona',
                                'analyze', 'review', 'explore', 'examine', 'inspect',
