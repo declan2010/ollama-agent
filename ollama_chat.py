@@ -1129,12 +1129,16 @@ def _likely_needs_tools(message):
         'dime que opinas', 'que opinas', 'opinión', 'que piensas', 'que pense',
         'dime qué piensas', 'dime que piensas', 'dame tu opinión',
         'explica por qué', 'por qué pasa', 'cómo funciona', 'qué significa',
+        'averigua', 'averiguar', 'investiga', 'investigar', 'chequea', 'chequear',
+        'configuración', 'configuracion', 'diagnóstico', 'diagnostico',
+        'especificaciones', 'specs', 'system info', 'info del sistema',
         # English
         'analyze', 'analyse', 'analysis', 'review', 'explore', 'examine', 'inspect',
         'evaluate', 'assess', 'diagnose', 'compare', 'contrast', 'interpret',
         'summarize', 'synthesise', 'synthesize', 'what do you think', 'your opinion',
         'what\'s your take', 'give me your thoughts', 'break down', 'make sense of',
         'why does', 'how does', 'what does it mean', 'deep dive', 'dive into',
+        'find out', 'look up', 'check', 'investigate', 'system info', 'specs',
     ]
     if any(kw in msg_lower for kw in analysis_keywords):
         return True
@@ -1149,6 +1153,7 @@ def _likely_needs_tools(message):
         'haz un programa', 'crea un programa', 'programa un', 'codifica', 'codificar',
         'lee el archivo', 'muestra el archivo', 'abre el archivo',
         'listar archivos', 'mover archivo', 'copiar archivo', 'renombrar',
+        'lista de', 'saca una lista', 'muestrame los', 'dime cuántos',
         'compilar', 'deployar', 'desplegar', 'subir al server', 'git push',
         'commit', 'hacer commit', 'base de datos', 'sql', 'query',
         'permisos', 'chmod', 'matar proceso', 'kill process',
