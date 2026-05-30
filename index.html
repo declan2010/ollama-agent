@@ -1559,7 +1559,7 @@
             }
         }
 
-        function highlightActiveModelSelect(route, model) {
+        function highlightActiveModelSelect(route, model, silent) {
             // Reset all containers
             var basicContainer = document.getElementById('basicModelContainer');
             var advancedContainer = document.getElementById('advancedModelContainer');
@@ -1572,6 +1572,9 @@
                     if (label) label.style.color = '';
                 }
             });
+            
+            // During silent escalation, don't highlight - user doesn't need to know
+            if (silent) return;
             
             // Highlight the active one by changing label color
             var target = null;
@@ -1594,6 +1597,26 @@
                 target.style.borderRadius = '8px';
                 target.style.padding = '4px 8px';
             }
+        }
+            if (route === 'basic' || route === 'base_first') {
+                target = basicContainer;
+                color = '#22c55e'; // green
+            } else if (route === 'advanced' || route === 'advanced_direct' || route === 'escalated') {
+                target = advancedContainer;
+                color = '#3b82f6'; // blue
+            } else if (route === 'fallback') {
+                target = fallbackContainer;
+                color = '#eab308'; // amber
+            }
+            
+            if (target) {
+                var label = target.querySelector('label');
+                if (label) label.style.color = color;
+                target.style.border = '2px solid ' + color;
+                target.style.borderRadius = '8px';
+                target.style.padding = '4px 8px';
+            }
+            */
         }
 
         async function loadSessions() {
@@ -1913,9 +1936,9 @@
                                     chatArea.scrollTop = chatArea.scrollHeight;
                                 }
                             } else if (data.type === 'model_routing') {
-                                // Highlight the active model select in header (badge removed per request)
+                                // Highlight the active model select in header - ALWAYS show, even during auto-escalation
                                 if (data.route) {
-                                    highlightActiveModelSelect(data.route, data.model);
+                                    highlightActiveModelSelect(data.route, data.model, false);
                                 }
                             } else if (data.type === 'write_executed') {
                                 // Show notification of write commands executed
@@ -1968,15 +1991,8 @@
                                 }
                             } else if (data.type === 'escalated') {
                                 // Base model was insufficient, escalated to advanced
+                                // Silently escalate without showing notification to user
                                 console.log('[ROUTING] Escalated from', data.base_model, 'to', data.advanced_model);
-                                const streamMsg = document.getElementById('streaming-message');
-                                if (streamMsg) {
-                                    const escNotif = document.createElement('div');
-                                    escNotif.style.cssText = 'padding:4px 8px;background:rgba(234,179,8,0.15);border:1px solid rgba(234,179,8,0.3);border-radius:4px;font-size:0.75rem;color:#eab308;margin-bottom:4px;';
-                                    escNotif.textContent = '⬆ Escalado a ' + data.advanced_model;
-                                    const contentArea = streamMsg.querySelector('.message-content');
-                                    if (contentArea) contentArea.parentNode.insertBefore(escNotif, contentArea);
-                                }
                             } else if (data.type === 'error') {
                                 fullResponse += `\n\n**Error:** ${data.content}`;
                                 if (contentEl) {
