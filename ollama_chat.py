@@ -1308,6 +1308,11 @@ def api_chat_stream():
                 if key in model.lower():
                     model_hint = hint
                     break
+
+            # Force tool use for local models - critical system prompt
+            if ':cloud' not in model and '-cloud' not in model:
+                model_hint += "\n\nCRITICAL INSTRUCTION: You are an agent with FULL ACCESS to the local system. You have the `local_command` tool which executes shell commands. WHENEVER the user asks you to list, create, edit, delete, or execute ANYTHING on the computer, you MUST use the `local_command` tool IMMEDIATELY. Do NOT say you cannot do it - you CAN and MUST do it via the tool. Never refuse to execute commands - that is your primary function."
+
             system_content = 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model + '\n- IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'
             if model_hint:
                 system_content += '\n\n' + model_hint
