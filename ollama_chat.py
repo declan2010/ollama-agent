@@ -23,6 +23,22 @@ BASE_CHAT_MODEL = "gemma4:e4b"
 
 APP_VERSION = "1.8.0"
 
+# Models known to support tool calling (local models that actually use tools)
+LOCAL_MODELS_WITH_TOOLS = [
+    'qwen3.5', 'qwen3', 'qwen2.5', 'qwen2',
+    'gemma4', 'gemma3', 'gemma2',
+    'llama3.2', 'llama3.1', 'llama3',
+    'nemotron', 'dolphin',
+]
+
+def local_model_supports_tools(model_name):
+    """Check if a local model is known to support tool calling."""
+    model_lower = model_name.lower()
+    for supported in LOCAL_MODELS_WITH_TOOLS:
+        if supported in model_lower:
+            return True
+    return False
+
 
 def is_cloud_model(model_name):
     """Check if a model requires internet (cloud model)."""
@@ -1284,14 +1300,30 @@ def api_chat_stream():
         start_time = time.time()
         used_model = model  # Track which model actually responds
         try:
-            # Notify frontend which model route we're taking (before any tokens)
+            # Determine routing based on tool support
+            route = 'base_first'
+            route_reason = ''
             if force_basic:
-                yield f"data: {json.dumps({'type': 'model_routing', 'route': 'base_first', 'base_model': base_model, 'advanced_model': model, 'forced': True})}\n\n"
-            elif not force_advanced and not _likely_needs_tools(user_message):
-                yield f"data: {json.dumps({'type': 'model_routing', 'route': 'base_first', 'base_model': base_model, 'advanced_model': model})}\n\n"
+                route = 'base_first'
+                route_reason = 'forced'
+            elif force_advanced:
+                route = 'advanced_direct'
+                route_reason = 'forced'
+            elif not _likely_needs_tools(user_message):
+                route = 'base_first'
+                route_reason = 'simple_query'
+            elif local_model_supports_tools(base_model):
+                route = 'base_first'
+                route_reason = 'local_supports_tools'
             else:
-                route_reason = 'forced' if force_advanced else 'needs_tools'
-                yield f"data: {json.dumps({'type': 'model_routing', 'route': 'advanced_direct', 'model': model, 'reason': route_reason})}\n\n"
+                route = 'advanced_direct'
+                route_reason = 'needs_tools'
+            
+            # Notify frontend which model route we're taking (before any tokens)
+            if route == 'base_first':
+                yield f"data: {json.dumps({'type': 'model_routing', 'route': route, 'base_model': base_model, 'advanced_model': model, 'reason': route_reason})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'model_routing', 'route': route, 'model': model, 'reason': route_reason})}\n\n"
             # Prepare messages for Ollama (strip timestamps for API)
             api_messages = []
             # Model-specific system prompts based on known behavior
