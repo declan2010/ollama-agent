@@ -2375,6 +2375,7 @@ def api_chat():
     used_model = model
     is_local = False
     eval_count_val = 0
+    result = None  # Initialize to avoid UnboundLocalError
 
     # If force_basic, use base model directly without tools (no escalation)
     if force_basic:
