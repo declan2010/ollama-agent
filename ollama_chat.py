@@ -1446,48 +1446,25 @@ def api_chat_stream():
 
             # --- Base model routing: try simpler model first for simple conversations ---
             base_model_succeeded = False
-            needs_tools = _likely_needs_tools(user_message)
-            local_supports_tools = local_model_supports_tools(base_model)
             
-            # Decide whether to use base model:
-            # - force_basic: always use base
-            # - simple query: use base without tools
-            # - needs tools + local supports: use base WITH tools
-            # - needs tools + local doesn't support: skip base, go to advanced
-            should_use_base = force_basic or not needs_tools or (needs_tools and local_supports_tools)
-            
-            if should_use_base and not force_advanced:
-                bypass_weak_check = False  # Initialize flag
+            if force_basic or not _likely_needs_tools(user_message):
                 try:
                     import urllib.request as _urllib_base
                     
-                    # Build messages for base model
-                    if needs_tools and local_supports_tools:
-                        # Base model supports tools - pass full system prompt with tools
-                        base_api_messages = api_messages.copy()
-                        base_payload = {
-                            'model': base_model,
-                            'messages': base_api_messages,
-                            'stream': True,
-                            'keep_alive': KEEP_ALIVE,
-                            'tools': tools,
-                        }
-                        logger.info("Trying base model %s WITH tools (local supports tools)", base_model)
-                    else:
-                        # Simple query - no tools needed
-                        base_api_messages = [{'role': 'system', 'content': 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'}]
-                        for msg in session_data['messages']:
-                            base_api_messages.append({
-                                'role': msg['role'],
-                                'content': msg['content']
-                            })
-                        base_payload = {
-                            'model': base_model,
-                            'messages': base_api_messages,
-                            'stream': True,
-                            'keep_alive': KEEP_ALIVE,
-                        }
-                        logger.info("Trying base model %s for simple query (len=%d)", base_model, len(user_message))
+                    # Simple query - no tools needed, use base model without tools
+                    base_api_messages = [{'role': 'system', 'content': 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in.'}]
+                    for msg in session_data['messages']:
+                        base_api_messages.append({
+                            'role': msg['role'],
+                            'content': msg['content']
+                        })
+                    base_payload = {
+                        'model': base_model,
+                        'messages': base_api_messages,
+                        'stream': True,
+                        'keep_alive': KEEP_ALIVE,
+                    }
+                    logger.info("Trying base model %s for simple query (len=%d)", base_model, len(user_message))
                     
                     base_data_bytes = json.dumps(base_payload).encode('utf-8')
                     base_req = _urllib_base.Request(
