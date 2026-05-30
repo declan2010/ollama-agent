@@ -1598,26 +1598,6 @@
                 target.style.padding = '4px 8px';
             }
         }
-            if (route === 'basic' || route === 'base_first') {
-                target = basicContainer;
-                color = '#22c55e'; // green
-            } else if (route === 'advanced' || route === 'advanced_direct' || route === 'escalated') {
-                target = advancedContainer;
-                color = '#3b82f6'; // blue
-            } else if (route === 'fallback') {
-                target = fallbackContainer;
-                color = '#eab308'; // amber
-            }
-            
-            if (target) {
-                var label = target.querySelector('label');
-                if (label) label.style.color = color;
-                target.style.border = '2px solid ' + color;
-                target.style.borderRadius = '8px';
-                target.style.padding = '4px 8px';
-            }
-            */
-        }
 
         async function loadSessions() {
             try {
