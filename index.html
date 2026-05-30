@@ -1936,11 +1936,9 @@
                                     chatArea.scrollTop = chatArea.scrollHeight;
                                 }
                             } else if (data.type === 'model_routing') {
-                                // Highlight the active model select in header
-                                // Silent when escalated automatically (needs_tools), visible when user-selected
-                                var silent = (data.reason === 'needs_tools');
+                                // Highlight the active model select in header - ALWAYS show, even during auto-escalation
                                 if (data.route) {
-                                    highlightActiveModelSelect(data.route, data.model, silent);
+                                    highlightActiveModelSelect(data.route, data.model, false);
                                 }
                             } else if (data.type === 'write_executed') {
                                 // Show notification of write commands executed
