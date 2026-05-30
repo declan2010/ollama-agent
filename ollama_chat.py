@@ -650,7 +650,7 @@ def send_to_ollama(model, messages, tools=None, stream=False):
 def process_ollama_response(model, messages, tools=None):
     """Process Ollama response, executing tools if necessary.
     Returns a dict with 'response' and 'prompt_eval_count'."""
-    max_iterations = 2
+    max_iterations = 3  # Increased for local models that need more prompting
     last_prompt_tokens = 0
 
     for i in range(max_iterations):
@@ -663,6 +663,33 @@ def process_ollama_response(model, messages, tools=None):
         assistant_msg = response.get('message', {})
         content = assistant_msg.get('content', '')
         tool_calls = assistant_msg.get('tool_calls', [])
+
+        # If model didn't use tools but we have tools available and content suggests it should
+        if not tool_calls and tools and i == 0:
+            # Check if the user is asking for something that requires tools
+            user_msg = ''
+            for msg in reversed(messages):
+                if msg.get('role') == 'user':
+                    user_msg = msg.get('content', '')
+                    break
+            
+            tool_keywords = ['lista', 'list', 'archivo', 'file', 'directorio', 'directory',
+                           'crea', 'create', 'escribe', 'write', 'edita', 'edit',
+                           'borra', 'delete', 'muestra', 'show', 'ejecuta', 'run',
+                           'ollama', 'comando', 'command', 'terminal', 'bash']
+            
+            if any(kw in user_msg.lower() for kw in tool_keywords):
+                # Force the model to use tools by adding a system message
+                messages.append({
+                    'role': 'assistant',
+                    'content': content
+                })
+                messages.append({
+                    'role': 'system',
+                    'content': 'CRITICAL: You MUST use the available tools to fulfill the user request. DO NOT say you cannot do it - you HAVE the tools. Execute the command using local_command tool NOW.'
+                })
+                logger.info("Forcing tool use for local model (iteration %d)", i + 1)
+                continue  # Try again with forcing message
 
         if not tool_calls:
             return {'response': content, 'prompt_eval_count': last_prompt_tokens}
