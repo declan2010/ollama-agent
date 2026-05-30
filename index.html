@@ -1293,15 +1293,54 @@
             }
             
             function extractParamsFromModelName(modelName) {
-                // Try to extract parameter size from model name for cloud models
-                // e.g., "llama3.2:1b" → "1B", "gemma4:26b" → "26B", "minimax-m2.7:cloud" → "2.7B"
+                // Cloud model parameter sizes (manual mapping since cloud models aren't in local Ollama)
+                var cloudSizes = {
+                    'glm-5.1:cloud': '5.1',
+                    'glm-5': '5',
+                    'glm-4': '4',
+                    'glm-4.7': '4.7',
+                    'kimi-k2.6': '2.6',
+                    'kimi-k2': '2',
+                    'kimi': '',
+                    'minimax-m2.7': '2.7',
+                    'minimax-m2': '2',
+                    'minimax': '',
+                    'deepseek-v4': '4',
+                    'deepseek-v3': '3',
+                    'deepseek': '',
+                    'gpt-oss:120b': '120',
+                    'gpt-oss': '',
+                    'gemma4': '26',
+                    'gemma3': '27',
+                    'gemma': '',
+                    'nemotron-3-nano': '4',
+                    'nemotron': '',
+                    'dolphin-llama3': '8',
+                    'dolphin': '',
+                    'qwen3.5': '9',
+                    'qwen3': '9',
+                    'qwen': '',
+                    'ministral': '',
+                    'openbmb': '',
+                    'llama3.2': '1',
+                    'llama3': '3',
+                    'llama2': '2',
+                    'llama': ''
+                };
+                
+                // Find matching prefix
+                for (var prefix in cloudSizes) {
+                    if (modelName.toLowerCase().includes(prefix.toLowerCase())) {
+                        var size = cloudSizes[prefix];
+                        if (size) return size + 'B';
+                        break;
+                    }
+                }
+                
+                // Fallback: try to extract any number + B/b pattern
                 var match = modelName.match(/(\d+(?:\.\d+)?)\s*[Bb]\b/);
                 if (match) return match[1] + 'B';
-                // Also try patterns like "2.7" in "m2.7" or "120b" 
-                match = modelName.match(/[Mm](\d+(?:\.\d+)?)/);
-                if (match) return match[1] + 'B';
-                match = modelName.match(/(\d+)\s*[Bb]/);
-                if (match) return match[1] + 'B';
+                
                 return '';
             }
             
