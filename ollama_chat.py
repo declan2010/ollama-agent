@@ -576,13 +576,22 @@ def get_model_info(model_name):
                         break
 
             details = data.get('details', {})
-            # Extract parameter_size (e.g. "8.0B", "4.1B") from details or model_info
+            # Extract and normalize parameter_size (e.g. "8.0B", "4.1B", "229B")
             parameter_size = details.get('parameter_size', '')
             if not parameter_size:
                 for key in model_info:
                     if 'parameter_size' in key.lower() or 'param_count' in key.lower():
                         parameter_size = str(model_info[key])
                         break
+            
+            # Format raw parameter numbers to billions (B)
+            if parameter_size and parameter_size.replace('.', '', 1).isdigit():
+                try:
+                    num = float(parameter_size)
+                    if num >= 1_000_000_000:
+                        parameter_size = f"{(num / 1_000_000_000):.1f}B"
+                except (ValueError, TypeError):
+                    pass
 
             return {
                 'model': model_name,
