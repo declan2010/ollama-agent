@@ -1864,6 +1864,8 @@
         async function sendStreamingMessage(message) {
             const contentEl = document.querySelector('#streaming-message .message-content');
             let fullResponse = '';
+            let streamTokenCount = 0;
+            let lastStreamRender = Date.now();
 
             // Create AbortController for this request
             currentAbortController = new AbortController();
@@ -1911,9 +1913,34 @@
                             if (data.type === 'token') {
                                 fullResponse += data.content;
                                 if (contentEl) {
-                                    contentEl.innerHTML = renderMarkdown(fullResponse);
-                                    addCopyButtons(contentEl);
-                                    chatArea.scrollTop = chatArea.scrollHeight;
+                                    // Throttled markdown rendering to prevent jitter during streaming
+                                    // Full render every ~150ms, plain text append between renders
+                                    streamTokenCount++;
+                                    const now = Date.now();
+                                    const timeSinceLastRender = now - lastStreamRender;
+                                    const isCompleteCodeBlock = fullResponse.endsWith('```') && !fullResponse.endsWith('\\```');
+                                    
+                                    if (streamTokenCount % 5 === 0 || timeSinceLastRender > 150 || isCompleteCodeBlock) {
+                                        // Full markdown render (throttled)
+                                        contentEl.innerHTML = renderMarkdown(fullResponse);
+                                        lastStreamRender = now;
+                                    } else {
+                                        // Quick append: just add the text without full re-render
+                                        // This prevents jitter between full renders
+                                        const textNode = document.createTextNode(data.content);
+                                        const lastChild = contentEl.lastChild;
+                                        if (lastChild && lastChild.nodeType === Node.TEXT_NODE) {
+                                            lastChild.textContent += data.content;
+                                        } else {
+                                            contentEl.appendChild(textNode);
+                                        }
+                                    }
+                                    
+                                    // Only scroll if user is near the bottom (within 100px)
+                                    const nearBottom = chatArea.scrollHeight - chatArea.scrollTop - chatArea.clientHeight < 100;
+                                    if (nearBottom) {
+                                        chatArea.scrollTop = chatArea.scrollHeight;
+                                    }
                                 }
                             } else if (data.type === 'model_routing') {
                                 // Highlight the active model select in header - ALWAYS show, even during auto-escalation
@@ -2025,6 +2052,11 @@
                                     // Also highlight the select in header based on final used model
                                     const finalRoute = data.is_local ? 'basic' : 'advanced';
                                     highlightActiveModelSelect(finalRoute, data.used_model);
+                                }
+                                // Final render with copy buttons and collapse toggles
+                                if (contentEl) {
+                                    contentEl.innerHTML = renderMarkdown(fullResponse);
+                                    addCopyButtons(contentEl);
                                 }
                                 // Don't call checkModelStatus here - it overwrites the badge with selected model info
                                 // The badge was already updated by updateBadgeForUsedModel above
