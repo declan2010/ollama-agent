@@ -1699,6 +1699,17 @@
         async function newChat() {
             // Close any open write permission modal
             document.getElementById('writePermissionModal').classList.remove('active');
+            
+            // CRITICAL: Stop any ongoing generation and reset state
+            stopGeneration();
+            
+            // Reset UI state
+            isWaiting = false;
+            sendBtn.style.display = '';
+            stopBtn.style.display = 'none';
+            sendBtn.disabled = false;
+            typingIndicator.classList.remove('active');
+            
             try {
                 const response = await fetch('/api/session/new', { method: 'POST' });
                 const data = await response.json();
@@ -1733,6 +1744,17 @@
         async function switchSession(sessionId) {
             // Close any open write permission modal
             document.getElementById('writePermissionModal').classList.remove('active');
+            
+            // CRITICAL: Stop any ongoing generation and reset state
+            stopGeneration();
+            
+            // Reset UI state
+            isWaiting = false;
+            sendBtn.style.display = '';
+            stopBtn.style.display = 'none';
+            sendBtn.disabled = false;
+            typingIndicator.classList.remove('active');
+            
             try {
                 // Sync server-side session first
                 await fetch('/api/session/switch', {
@@ -1770,9 +1792,47 @@
                 chatArea.innerHTML = '';
 
                 if (data.messages && data.messages.length > 0) {
-                    data.messages.forEach(msg => {
-                        addMessageToUI(msg.role, msg.content);
+                    // OPTIMIZATION: Only render last 20 messages initially to prevent browser freeze
+                    const MAX_INITIAL_MESSAGES = 20;
+                    const messagesToRender = data.messages.slice(-MAX_INITIAL_MESSAGES);
+                    const hasMoreMessages = data.messages.length > MAX_INITIAL_MESSAGES;
+                    const hiddenCount = data.messages.length - messagesToRender.length;
+                    
+                    // Use DocumentFragment for better performance
+                    const fragment = document.createDocumentFragment();
+                    
+                    // Add "load more" indicator if there are older messages
+                    if (hasMoreMessages) {
+                        const loadMoreDiv = document.createElement('div');
+                        loadMoreDiv.id = 'loadMoreMessages';
+                        loadMoreDiv.style.cssText = 'text-align:center;padding:10px;background:var(--bg-tertiary);border-radius:8px;margin-bottom:10px;cursor:pointer;color:var(--text-secondary);font-size:0.85rem;';
+                        loadMoreDiv.innerHTML = `⬆️ Load ${hiddenCount} older messages`;
+                        loadMoreDiv.onclick = function() {
+                            // Load all remaining messages
+                            const allMessages = data.messages.slice(0, -MAX_INITIAL_MESSAGES);
+                            const loadMoreBtn = document.getElementById('loadMoreMessages');
+                            if (loadMoreBtn) loadMoreBtn.remove();
+                            
+                            allMessages.forEach(msg => {
+                                addMessageToUI(msg.role, msg.content, true);
+                            });
+                        };
+                        fragment.appendChild(loadMoreDiv);
+                    }
+                    
+                    // Render recent messages
+                    messagesToRender.forEach(msg => {
+                        const msgDiv = createMessageElement(msg.role, msg.content);
+                        fragment.appendChild(msgDiv);
                     });
+                    
+                    chatArea.appendChild(fragment);
+                    
+                    // Add copy buttons to all messages at once (more efficient)
+                    addCopyButtonsToAll();
+                    
+                    // Scroll to bottom
+                    chatArea.scrollTop = chatArea.scrollHeight;
                 } else {
                     chatArea.innerHTML = `
                         <div class="welcome-message">
@@ -2153,10 +2213,8 @@
             }
         }
 
-        function addMessageToUI(role, content) {
-            const welcome = chatArea.querySelector('.welcome-message');
-            if (welcome) welcome.remove();
-
+        // Create message element without adding to DOM (for batch rendering)
+        function createMessageElement(role, content) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}`;
 
@@ -2170,9 +2228,39 @@
                 <div class="message-content">${renderedContent}</div>
             `;
 
+            return messageDiv;
+        }
+
+        // Add copy buttons to all messages at once (more efficient)
+        function addCopyButtonsToAll() {
+            const allMessages = chatArea.querySelectorAll('.message');
+            allMessages.forEach(msg => {
+                const content = msg.querySelector('.message-content');
+                if (content && !content.dataset.copyButtonsAdded) {
+                    addCopyButtons(content);
+                    content.dataset.copyButtonsAdded = 'true';
+                }
+            });
+        }
+
+        function addMessageToUI(role, content, preventScroll = false) {
+            const welcome = chatArea.querySelector('.welcome-message');
+            if (welcome) welcome.remove();
+
+            const messageDiv = createMessageElement(role, content);
             chatArea.appendChild(messageDiv);
-            addCopyButtons(messageDiv.querySelector('.message-content'));
-            chatArea.scrollTop = chatArea.scrollHeight;
+            
+            // Use requestAnimationFrame for smoother rendering
+            requestAnimationFrame(() => {
+                const contentDiv = messageDiv.querySelector('.message-content');
+                if (contentDiv) {
+                    addCopyButtons(contentDiv);
+                }
+            });
+            
+            if (!preventScroll) {
+                chatArea.scrollTop = chatArea.scrollHeight;
+            }
         }
 
         // Mutual exclusion between Force Advanced and Force Basic

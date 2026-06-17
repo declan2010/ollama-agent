@@ -5,3 +5,6 @@ plans/
 .venv/
 test_ddgs.py
 check_syntax.py
+simplify.py
+*.broken_*
+*.backup_*
