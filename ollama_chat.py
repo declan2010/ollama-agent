@@ -1312,7 +1312,10 @@ def api_chat_stream():
             if force_basic:
                 route = 'base_first'
                 route_reason = 'forced'
-            elif force_advanced or _likely_needs_tools(user_message):
+            elif force_advanced:
+                route = 'advanced_direct'
+                route_reason = 'forced'
+            elif _likely_needs_tools(user_message):
                 route = 'advanced_direct'
                 route_reason = 'needs_tools'
             else:
@@ -1447,7 +1450,7 @@ def api_chat_stream():
             # --- Base model routing: try simpler model first for simple conversations ---
             base_model_succeeded = False
             
-            if force_basic or not _likely_needs_tools(user_message):
+            if not force_advanced and (force_basic or not _likely_needs_tools(user_message)):
                 try:
                     import urllib.request as _urllib_base
                     
