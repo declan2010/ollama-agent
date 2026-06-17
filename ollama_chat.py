@@ -782,6 +782,64 @@ def process_ollama_response(model, messages, tools=None):
             'prompt_eval_count': last_prompt_tokens}
 
 
+# --- DSML Tool Call Parsing ---
+DSML_PATTERN = re.compile(r'<\w+[：:｜|]\s*invoke\s+name="(\w+)"[^>]*>.*?<\w+[：:｜|]\s*parameter\s+name="(\w+)"\s+string="(true|false)"\s*>([^<]*)', re.DOTALL)
+DSML_PATTERN2 = re.compile(r'<(\w+)[：:｜|]\s*invoke\s+name="(\w+)"[^>]*>\s*<\1[：:｜|]\s*parameter\s+name="(\w+)"\s+string="(true|false)"\s*>([^<]*)', re.DOTALL)
+DSML_PATTERN_SIMPLE = re.compile(r'<(\w+)[：:｜|](?:invoke|Invoke)\s+name="(\w+)"[^>]*>')
+DSML_STRIP = re.compile(r'<\w+[：:｜|]\s*\w+(?:\s+[^>]*)?>[^<]*(?:<\w+[：:｜|]\s*\w+(?:\s+[^>]*)?>)?')
+
+def parse_dsml_calls(text):
+    """Extract DSML-style tool invocations from model response text."""
+    calls = []
+    # First try detailed pattern with parameters
+    for m in DSML_PATTERN2.finditer(text):
+        ns = m.group(1)
+        name = m.group(2)
+        param_name = m.group(3)
+        param_value = m.group(5).strip()
+        calls.append({'name': name, 'arguments': {param_name: param_value}, 'namespace': ns})
+    # Also try simple pattern (just the invocation tag)
+    for m in DSML_PATTERN_SIMPLE.finditer(text):
+        name = m.group(2)
+        # Check if this invocation was already found by the detailed pattern
+        already_found = any(c['name'] == name for c in calls)
+        if not already_found:
+            calls.append({'name': name, 'arguments': {}, 'namespace': m.group(1)})
+    return calls
+
+def execute_tool_call(tc, current_chat_id=''):
+    """Execute a tool call (from DSML or native format) and return result string."""
+    func_name = tc.get('name', tc.get('function', {}).get('name', ''))
+    args = tc.get('arguments', {})
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            args = {}
+    logger.info("Executing tool: %s(%s)", func_name, json.dumps(args))
+    if func_name == 'local_command':
+        cmd = args.get('command', '')
+        if is_write_command(cmd):
+            return execute_write_command(cmd, current_chat_id)
+        return execute_local_command(cmd)
+    elif func_name == 'web_search':
+        query = args.get('query', '')
+        results = web_search(query)
+        if results and isinstance(results, list) and 'error' in results[0]:
+            return f"Search error: {results[0]['error']}"
+        text = "Search results:\n\n"
+        for idx, r in enumerate(results[:5], 1):
+            text += f"{idx}. {r['title']}\n   URL: {r['url']}\n   {r['snippet']}\n\n"
+        return text
+    elif func_name == 'fetch_article':
+        url = args.get('url', '')
+        article = fetch_article(url)
+        if 'content' in article:
+            return f"Article from {url}:\n\n{article['content']}"
+        return f"Could not fetch article from {url}: {article.get('error', 'Unknown error')}"
+    return f"Unknown tool: {func_name}"
+
+
 # --- Ollama Tools Definition ---
 OLLAMA_TOOLS = [
     {
@@ -1981,6 +2039,16 @@ def api_chat_stream():
 
                                 # If model gives both content and tool calls, prefer content
                                 if followup_content and not followup_tool_calls:
+                                    dsml_calls = parse_dsml_calls(followup_content)
+                                    if dsml_calls:
+                                        logger.info("Detected %d DSML call(s) in follow-up, processing...", len(dsml_calls))
+                                        clean_fu = DSML_STRIP.sub('', followup_content).strip()
+                                        if clean_fu:
+                                            followup_messages.append({'role': 'assistant', 'content': clean_fu})
+                                        for d_tc in dsml_calls:
+                                            tr = execute_tool_call(d_tc, current_chat_id)
+                                            followup_messages.append({'role': 'tool', 'content': tr, 'tool_call_id': f'fu_dsml_{uuid.uuid4().hex[:8]}'})
+                                        continue
                                     full_response = followup_content
                                     yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                                     prompt_tokens = followup_result.get('prompt_eval_count', prompt_tokens)
@@ -2209,6 +2277,50 @@ def api_chat_stream():
                             # Send SSE event
                             sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
                             yield f"data: {sse_data}\n\n"
+
+                # Check for DSML-style tool calls in the response (some models use DSML instead of native Ollama tool calls)
+                if full_response and not tool_calls_buffer:
+                    dsml_calls = parse_dsml_calls(full_response)
+                    if dsml_calls:
+                        logger.info("Detected %d DSML tool call(s) in streaming response", len(dsml_calls))
+                        # Strip DSML from displayed content
+                        clean_rsp = DSML_STRIP.sub('', full_response).strip()
+                        if clean_rsp:
+                            full_response = clean_rsp
+                        else:
+                            full_response = ''
+                        # Execute DSML tool calls (will be re-processed below as if they were native calls)
+                        dsml_followup_msgs = []
+                        for msg in session_data['messages']:
+                            dsml_followup_msgs.append({'role': msg['role'], 'content': msg['content']})
+                        if full_response:
+                            dsml_followup_msgs.append({'role': 'assistant', 'content': full_response})
+                        for d_tc in dsml_calls:
+                            tr_content = execute_tool_call(d_tc, current_chat_id)
+                            dsml_followup_msgs.append({'role': 'tool', 'content': tr_content, 'tool_call_id': f'dsml_{uuid.uuid4().hex[:8]}'})
+                        # Send tool results back to model for final response
+                        dsml_result = send_to_ollama(model, dsml_followup_msgs, None, stream=False)
+                        dsml_content = dsml_result.get('message', {}).get('content', '')
+                        if dsml_content:
+                            full_response = dsml_content
+                            yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                            prompt_tokens = dsml_result.get('prompt_eval_count', prompt_tokens)
+                        # Also check if the follow-up response itself contains DSML
+                        dsml_calls2 = parse_dsml_calls(full_response) if dsml_content else []
+                        if dsml_calls2:
+                            logger.info("Detected %d DSML calls in DSML follow-up, processing...", len(dsml_calls2))
+                            clean_rsp2 = DSML_STRIP.sub('', full_response).strip()
+                            for d_tc2 in dsml_calls2:
+                                tr_content2 = execute_tool_call(d_tc2, current_chat_id)
+                                dsml_followup_msgs.append({'role': 'tool', 'content': tr_content2, 'tool_call_id': f'dsml2_{uuid.uuid4().hex[:8]}'})
+                            dsml_result2 = send_to_ollama(model, dsml_followup_msgs, None, stream=False)
+                            dsml_content2 = dsml_result2.get('message', {}).get('content', '')
+                            if dsml_content2:
+                                full_response = dsml_content2
+                                yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                prompt_tokens = dsml_result2.get('prompt_eval_count', prompt_tokens)
+                        elif not full_response:
+                            full_response = '(Tool execution completed)'
 
                 # If response was empty and no tool calls, try fallback
                 if not full_response and not tool_calls_buffer:
