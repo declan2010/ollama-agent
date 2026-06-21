@@ -1237,6 +1237,12 @@ def _likely_needs_tools(message):
         'compilar', 'deployar', 'desplegar', 'subir al server', 'git push',
         'commit', 'hacer commit', 'base de datos', 'sql', 'query',
         'permisos', 'chmod', 'matar proceso', 'kill process',
+        'código', 'codigo', 'programación', 'programacion', 'programar',
+        'desarrollar', 'implementar', 'función', 'funcion', 'clase', 'método',
+        'variable', 'bug', 'error', 'debug', 'depurar', 'refactorizar',
+        'api', 'servidor', 'server', 'endpoint', 'webhook',
+        'docker', 'contenedor', 'deploy', 'testing', 'test',
+        'script', 'bash', 'python', 'javascript', 'html', 'css', 'json',
         # English
         'file', 'folder', 'directory', 'delete', 'remove file', 'edit file',
         'modify', 'create file', 'install', 'execute', 'run command',
@@ -1246,6 +1252,9 @@ def _likely_needs_tools(message):
         'grep ', 'head ', 'tail ', 'list files', 'move file', 'copy file',
         'rename', 'compile', 'deploy', 'push to', 'git commit', 'database',
         'sql', 'query', 'permissions', 'chmod', 'kill process',
+        'code', 'programming', 'function', 'class', 'method', 'variable',
+        'debug', 'refactor', 'api', 'endpoint', 'docker', 'container',
+        'testing', 'script', 'python', 'javascript', 'html', 'css', 'json',
     ]
     if any(kw in msg_lower for kw in file_keywords):
         return True
@@ -1398,15 +1407,21 @@ def api_chat_stream():
         start_time = time.time()
         used_model = model  # Track which model actually responds
         try:
-            # Determine routing: if force_basic, use base model; otherwise always use advanced
+            # Determine routing: base model for simple questions, advanced for code/tools
             route = 'base_first'
             route_reason = ''
             if force_basic:
                 route = 'base_first'
                 route_reason = 'forced'
-            else:
+            elif force_advanced:
                 route = 'advanced_direct'
-                route_reason = 'default'
+                route_reason = 'forced'
+            elif _likely_needs_tools(user_message):
+                route = 'advanced_direct'
+                route_reason = 'needs_tools'
+            else:
+                route = 'base_first'
+                route_reason = 'simple_query'
 
             # Notify frontend which model route we're taking (before any tokens)
             if route == 'base_first':
