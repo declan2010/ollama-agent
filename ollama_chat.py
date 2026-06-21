@@ -1935,7 +1935,8 @@ def api_chat_stream():
                     'role': 'assistant',
                     'content': full_response,
                     'timestamp': datetime.now().isoformat(),
-                    'elapsed': round(time.time() - start_time, 2)
+                    'elapsed': round(time.time() - start_time, 2),
+                    'model': used_model
                 })
                 session_data['context_usage'] = prompt_tokens
                 save_session(current_chat_id, session_data)
@@ -2648,19 +2649,19 @@ def api_chat_stream():
             yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'elapsed': elapsed, 'used_model': used_model, 'is_local': used_model == base_model, 'parameter_size': used_param_size, 'size': used_size})}\n\n"
             # Save what we have
             if full_response:
-                session_data['messages'].append({
-                    'role': 'assistant',
-                    'content': full_response,
-                    'timestamp': datetime.now().isoformat()
-                })
-                save_session(current_chat_id, session_data)
-            return
+                 session_data['messages'].append({
+                     'role': 'assistant',
+                     'content': full_response,
+                     'timestamp': datetime.now().isoformat(),
+                     'model': used_model
+                 })
 
         # Save session
         session_data['messages'].append({
             'role': 'assistant',
             'content': full_response,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'model': used_model
         })
         # Save context usage in session for per-conversation display
         session_data['context_usage'] = prompt_tokens
@@ -2966,7 +2967,8 @@ def api_chat():
     session_data['messages'].append({
         'role': 'assistant',
         'content': response_text,
-        'timestamp': datetime.now().isoformat()
+        'timestamp': datetime.now().isoformat(),
+        'model': used_model
     })
     session_data['context_usage'] = prompt_tokens
     save_session(current_chat_id, session_data)
