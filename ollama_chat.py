@@ -1398,23 +1398,16 @@ def api_chat_stream():
         start_time = time.time()
         used_model = model  # Track which model actually responds
         try:
-            # Determine routing: if tools needed, use cloud (advanced) model
-            # Local models don't reliably support tool calling in Ollama
+            # Determine routing: if force_basic, use base model; otherwise always use advanced
             route = 'base_first'
             route_reason = ''
             if force_basic:
                 route = 'base_first'
                 route_reason = 'forced'
-            elif force_advanced:
-                route = 'advanced_direct'
-                route_reason = 'forced'
-            elif _likely_needs_tools(user_message):
-                route = 'advanced_direct'
-                route_reason = 'needs_tools'
             else:
-                route = 'base_first'
-                route_reason = 'simple_query'
-            
+                route = 'advanced_direct'
+                route_reason = 'default'
+
             # Notify frontend which model route we're taking (before any tokens)
             if route == 'base_first':
                 yield f"data: {json.dumps({'type': 'model_routing', 'route': route, 'base_model': base_model, 'advanced_model': model, 'reason': route_reason})}\n\n"
