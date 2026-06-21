@@ -1652,39 +1652,92 @@ def api_chat_stream():
                             if tool_result is not None or tool_error is not None:
                                 result_msg = f"Tool '{tc_name}' result: "
                                 result_msg += str(tool_error) if tool_error else str(tool_result)
-                                messages_with_result = base_api_messages + [
+                                followup_messages = base_api_messages + [
                                     {'role': 'assistant', 'content': base_full_response or '', 'tool_calls': [tc]},
                                     {'role': 'tool', 'content': result_msg}
                                 ]
-                                result_payload = {
-                                    'model': base_model,
-                                    'messages': messages_with_result,
-                                    'stream': True,
-                                    'keep_alive': KEEP_ALIVE,
-                                    'tools': base_tools,
-                                }
-                                result_data_bytes = json.dumps(result_payload).encode('utf-8')
-                                result_req = _urllib_base.Request(
-                                    f'{OLLAMA_BASE_URL}/api/chat',
-                                    data=result_data_bytes,
-                                    headers={'Content-Type': 'application/json'}
-                                )
-                                with _urllib_base.urlopen(result_req) as result_response:
-                                    for result_line in result_response:
-                                        result_line = result_line.decode('utf-8').strip()
-                                        if not result_line:
-                                            continue
-                                        try:
-                                            result_chunk = json.loads(result_line)
-                                        except json.JSONDecodeError:
-                                            continue
-                                        if result_chunk.get('done'):
-                                            break
-                                        result_content = result_chunk.get('message', {}).get('content', '')
-                                        if result_content:
-                                            base_full_response += result_content
-                                            sse_data = json.dumps({'type': 'token', 'content': result_content, 'ts': round(time.time() - start_time, 2)})
-                                            yield f"data: {sse_data}\n\n"
+                                max_base_rounds = 8
+                                for base_round in range(max_base_rounds):
+                                    if base_round >= 2:
+                                        has_stop = any(
+                                            m.get('role') == 'system' and 'stop calling' in m.get('content', '').lower()
+                                            for m in followup_messages
+                                        )
+                                        if not has_stop:
+                                            followup_messages.append({
+                                                'role': 'system',
+                                                'content': 'IMPORTANT: You have gathered enough information. STOP calling tools. Now provide a comprehensive analysis and response to the user based on all the information you have collected. Do NOT make any more tool calls. Respond directly with your analysis.'
+                                            })
+                                    base_tools_this_round = base_tools if base_round < 2 else None
+                                    logger.info("Base follow-up round %d: sending tool result to %s", base_round + 1, base_model)
+                                    result_payload = {
+                                        'model': base_model,
+                                        'messages': followup_messages,
+                                        'stream': True,
+                                        'keep_alive': KEEP_ALIVE,
+                                        'tools': base_tools_this_round,
+                                    }
+                                    result_data_bytes = json.dumps(result_payload).encode('utf-8')
+                                    result_req = _urllib_base.Request(
+                                        f'{OLLAMA_BASE_URL}/api/chat',
+                                        data=result_data_bytes,
+                                        headers={'Content-Type': 'application/json'}
+                                    )
+                                    round_content = ''
+                                    round_tool_calls = []
+                                    with _urllib_base.urlopen(result_req, timeout=300) as result_response:
+                                        for result_line in result_response:
+                                            result_line = result_line.decode('utf-8').strip()
+                                            if not result_line:
+                                                continue
+                                            try:
+                                                result_chunk = json.loads(result_line)
+                                            except json.JSONDecodeError:
+                                                continue
+                                            if result_chunk.get('done'):
+                                                break
+                                            rc_msg = result_chunk.get('message', {})
+                                            result_content = rc_msg.get('content', '')
+                                            if result_content:
+                                                round_content += result_content
+                                                base_full_response += result_content
+                                                sse_data = json.dumps({'type': 'token', 'content': result_content, 'ts': round(time.time() - start_time, 2)})
+                                                yield f"data: {sse_data}\n\n"
+                                            if rc_msg.get('tool_calls'):
+                                                for rtc in rc_msg['tool_calls']:
+                                                    round_tool_calls.append(rtc)
+                                    logger.info("Base follow-up round %d: content_len=%d, tool_calls=%d", base_round + 1, len(round_content), len(round_tool_calls))
+                                    if not round_tool_calls:
+                                        break
+                                    followup_messages.append({'role': 'assistant', 'content': round_content or '', 'tool_calls': round_tool_calls})
+                                    for rtc in round_tool_calls:
+                                        rtc_name = rtc.get('function', {}).get('name', '')
+                                        rtc_args = rtc.get('function', {}).get('arguments', {})
+                                        if isinstance(rtc_args, str):
+                                            try:
+                                                rtc_args = json.loads(rtc_args)
+                                            except json.JSONDecodeError:
+                                                rtc_args = {}
+                                        rtc_result = None
+                                        rtc_error = None
+                                        if rtc_name == 'local_command':
+                                            cmd = rtc_args.get('command', '')
+                                            if is_write_command(cmd):
+                                                rtc_error = "Write commands not allowed in base mode"
+                                            else:
+                                                try:
+                                                    rtc_result = execute_local_command(cmd)
+                                                except Exception as e:
+                                                    rtc_error = str(e)
+                                        elif rtc_name == 'web_search':
+                                            query = rtc_args.get('query', '')
+                                            try:
+                                                rtc_result = web_search(query)
+                                            except Exception as e:
+                                                rtc_error = str(e)
+                                        tool_res_msg = f"Tool '{rtc_name}' result: "
+                                        tool_res_msg += str(rtc_error) if rtc_error else str(rtc_result)
+                                        followup_messages.append({'role': 'tool', 'content': tool_res_msg})
                                 base_model_succeeded = True
                                 used_model = base_model
                                 bypass_weak_check = True
@@ -2042,10 +2095,29 @@ def api_chat_stream():
 
                             # Make follow-up request(s) with tool results
                             # Model may request more tools - limit rounds, then force text response
-                            max_followup_rounds = 8
+                            max_followup_rounds = 5
                             for round_num in range(max_followup_rounds):
+                                tools_for_this_round = OLLAMA_TOOLS
+                                if round_num >= 2:
+                                    has_instruction = any(
+                                        m.get('role') == 'system' and 'stop calling' in m.get('content', '').lower()
+                                        for m in followup_messages
+                                    )
+                                    if not has_instruction:
+                                        followup_messages.append({
+                                            'role': 'system',
+                                            'content': 'IMPORTANT: You have gathered enough information. STOP calling tools NOW. Respond directly with your comprehensive analysis based on all the information you have collected. Do NOT make any more tool calls. Just write your response.'
+                                        })
+                                    has_instruction = any(
+                                        m.get('role') == 'system' and 'stop calling' in m.get('content', '').lower()
+                                        for m in followup_messages
+                                    )
+                                    if not has_instruction:
+                                        followup_messages.append({
+                                            'role': 'system',
+                                            'content': 'IMPORTANT: You have gathered enough information. STOP calling tools. Now provide a comprehensive analysis and response to the user based on all the information you have collected. Do NOT make any more tool calls. Respond directly with your analysis.'
+                                        })
                                 logger.info("Follow-up round %d: sending %d tool results back to %s", round_num + 1, len(tool_results), model)
-                                tools_for_this_round = OLLAMA_TOOLS if round_num < 5 else None
                                 followup_result = send_to_ollama(model, followup_messages, tools_for_this_round, stream=False)
                                 logger.info("Follow-up response: content_len=%d, has_tool_calls=%s", len(followup_result.get('message', {}).get('content', '')), bool(followup_result.get('message', {}).get('tool_calls')))
 
@@ -2154,6 +2226,38 @@ def api_chat_stream():
                                     if full_response:
                                         # Already have some content from earlier, send it
                                         pass
+                                    # If stop instruction was already sent but model still wants tools, force text
+                                    if round_num >= 3 and has_instruction:
+                                        logger.info("Model ignored stop instruction at round %d, forcing text response", round_num + 1)
+                                        # Execute the pending tool calls first
+                                        followup_messages.append({'role': 'assistant', 'content': '', 'tool_calls': followup_tool_calls})
+                                        for tc in followup_tool_calls:
+                                            tc_name = tc.get('function', {}).get('name', '')
+                                            tc_args = parse_tool_args(tc.get('function', {}).get('arguments', {}))
+                                            tc_id = tc.get('id', f'tool_{round_num}_{len(followup_tool_calls)}')
+                                            if tc_name == 'local_command':
+                                                cmd = tc_args.get('command', '')
+                                                if is_write_command(cmd):
+                                                    tr_content = "Write commands not allowed"
+                                                else:
+                                                    tr_content = execute_local_command(cmd)
+                                            elif tc_name == 'web_search':
+                                                results = web_search(tc_args.get('query', ''))
+                                                tr_content = json.dumps(results[:5]) if results else "No results"
+                                            elif tc_name == 'fetch_article':
+                                                article = fetch_article(tc_args.get('url', ''))
+                                                tr_content = article.get('content', '')[:2000] if article.get('content') else "Could not fetch"
+                                            else:
+                                                tr_content = f"Unknown tool: {tc_name}"
+                                            followup_messages.append({'role': 'tool', 'content': tr_content, 'tool_call_id': tc_id})
+                                        # Force a text response without tools
+                                        final_result = send_to_ollama(model, followup_messages, None, stream=False)
+                                        final_content = final_result.get('message', {}).get('content', '')
+                                        if final_content:
+                                            full_response = final_content
+                                            yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                            prompt_tokens = final_result.get('prompt_eval_count', prompt_tokens)
+                                        break
                                     # Model wants more tool calls - execute them
                                     logger.info("Follow-up round %d: model requested %d more tool calls", round_num + 1, len(followup_tool_calls))
                                     # Add assistant message with tool calls to history
