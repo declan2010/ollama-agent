@@ -1438,7 +1438,14 @@ def api_chat_stream():
                     break
 
 
-            system_content = 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- TOOL CALLING FORMAT: When you need to use a tool, respond using the native function calling format provided by the system. The tools are already defined for you in the API. Simply select the appropriate tool and provide the required parameters. Do NOT output XML like <dsml:invoke> or JSON tool calls in text.\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model + '\n- IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'
+            # Detect simple messages that don't need tools
+            simple_greetings = ['hola', 'hello', 'hi', 'hey', 'buenos días', 'buenas tardes', 'buenas noches', 'qué tal', 'como estas', 'cómo estás', 'how are you', 'sup', 'saludos', 'gracias', 'thanks', 'thank you', 'bye', 'adiós', 'chao', 'ok', 'si', 'no', 'yes', 'nope']
+            is_simple = user_message.strip().lower() in simple_greetings or len(user_message.strip()) < 15 and not any(kw in user_message.lower() for kw in ['archivo', 'file', 'crear', 'create', 'leer', 'read', 'listar', 'list', 'buscar', 'search', 'comando', 'command', 'ejecutar', 'run', 'directorio', 'directory', 'proyecto', 'project', 'analizar', 'analyze', 'carpeta', 'folder', 'escribir', 'write', 'editar', 'edit'])
+
+            if is_simple:
+                system_content = 'You are a helpful assistant. Respond naturally and concisely. Always respond in the same language the user writes in. Your model name is: ' + model
+            else:
+                system_content = 'You are a helpful assistant. IMPORTANT RULES:\n- For simple greetings, questions, or casual conversation, respond naturally WITHOUT using any tools. Only use tools when the user explicitly asks you to do something that requires them (like reading files, searching the web, or running commands).\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- TOOL CALLING FORMAT: When you need to use a tool, respond using the native function calling format provided by the system. The tools are already defined for you in the API. Simply select the appropriate tool and provide the required parameters. Do NOT output XML like <dsml:invoke> or JSON tool calls in text.\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model + '\n- IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'
             if model_hint:
                 system_content += '\n\n' + model_hint
             api_messages.append({
@@ -1968,7 +1975,7 @@ def api_chat_stream():
                 'messages': api_messages,
                 'stream': True,
                 'keep_alive': KEEP_ALIVE,
-                'tools': OLLAMA_TOOLS,
+                'tools': [] if is_simple else OLLAMA_TOOLS,
             }
 
             import urllib.request
