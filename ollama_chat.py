@@ -788,24 +788,43 @@ DSML_PATTERN = re.compile(r'<\w+[：:｜|]\s*invoke\s+name="(\w+)"[^>]*>.*?<\w+[
 DSML_PATTERN2 = re.compile(r'<(\w+)[：:｜|]\s*invoke\s+name="(\w+)"[^>]*>\s*<\1[：:｜|]\s*parameter\s+name="(\w+)"\s+string="(true|false)"\s*>([^<]*)', re.DOTALL)
 DSML_PATTERN_SIMPLE = re.compile(r'<(\w+)[：:｜|](?:invoke|Invoke)\s+name="(\w+)"[^>]*>')
 DSML_STRIP = re.compile(r'<\w+[：:｜|]\s*\w+(?:\s+[^>]*)?>[^<]*(?:<\w+[：:｜|]\s*\w+(?:\s+[^>]*)?>)?')
+JSON_TOOL_STRIP = re.compile(r'\{\s*"tool"\s*:\s*"[^"]*"\s*,\s*"(?:parameters|arguments)"\s*:\s*\{.*?\}\s*\}')
+def strip_tool_tags(text):
+    """Strip DSML and JSON tool call tags from text."""
+    t = DSML_STRIP.sub('', text)
+    t = JSON_TOOL_STRIP.sub('', t)
+    return t
+
+# JSON tool call format: {"tool": "name", "parameters": {...}} or {"tool": "name", "arguments": {...}}
+JSON_TOOL_PATTERN = re.compile(r'\{\s*"tool"\s*:\s*"(\w+)"\s*,\s*"(?:parameters|arguments)"\s*:\s*(\{.*?\})\s*\}', re.DOTALL)
+JSON_TOOL_STRIP = re.compile(r'\{\s*"tool"\s*:\s*"[^"]*"\s*,\s*"(?:parameters|arguments)"\s*:\s*\{.*?\}\s*\}')
 
 def parse_dsml_calls(text):
-    """Extract DSML-style tool invocations from model response text."""
+    """Extract DSML-style or JSON tool invocations from model response text."""
     calls = []
-    # First try detailed pattern with parameters
+    # First try detailed DSML pattern with parameters
     for m in DSML_PATTERN2.finditer(text):
         ns = m.group(1)
         name = m.group(2)
         param_name = m.group(3)
         param_value = m.group(5).strip()
         calls.append({'name': name, 'arguments': {param_name: param_value}, 'namespace': ns})
-    # Also try simple pattern (just the invocation tag)
+    # Also try simple DSML pattern (just the invocation tag)
     for m in DSML_PATTERN_SIMPLE.finditer(text):
         name = m.group(2)
-        # Check if this invocation was already found by the detailed pattern
         already_found = any(c['name'] == name for c in calls)
         if not already_found:
             calls.append({'name': name, 'arguments': {}, 'namespace': m.group(1)})
+    # Try JSON format: {"tool": "name", "parameters"/"arguments": {...}}
+    for m in JSON_TOOL_PATTERN.finditer(text):
+        name = m.group(1)
+        already_found = any(c['name'] == name for c in calls)
+        if not already_found:
+            try:
+                args = json.loads(m.group(2))
+                calls.append({'name': name, 'arguments': args})
+            except json.JSONDecodeError:
+                calls.append({'name': name, 'arguments': {}})
     return calls
 
 def execute_tool_call(tc, current_chat_id=''):
@@ -2043,7 +2062,7 @@ def api_chat_stream():
                                     dsml_calls = parse_dsml_calls(followup_content)
                                     if dsml_calls:
                                         logger.info("Detected %d DSML call(s) in follow-up, processing...", len(dsml_calls))
-                                        clean_fu = DSML_STRIP.sub('', followup_content).strip()
+                                        clean_fu = strip_tool_tags(followup_content).strip()
                                         if clean_fu:
                                             followup_messages.append({'role': 'assistant', 'content': clean_fu})
                                         for d_tc in dsml_calls:
@@ -2285,7 +2304,7 @@ def api_chat_stream():
                     if dsml_calls:
                         logger.info("Detected %d DSML tool call(s) in streaming response", len(dsml_calls))
                         # Strip DSML from displayed content
-                        clean_rsp = DSML_STRIP.sub('', full_response).strip()
+                        clean_rsp = strip_tool_tags(full_response).strip()
                         if clean_rsp:
                             full_response = clean_rsp
                         else:
@@ -2310,7 +2329,7 @@ def api_chat_stream():
                         dsml_calls2 = parse_dsml_calls(full_response) if dsml_content else []
                         if dsml_calls2:
                             logger.info("Detected %d DSML calls in DSML follow-up, processing...", len(dsml_calls2))
-                            clean_rsp2 = DSML_STRIP.sub('', full_response).strip()
+                            clean_rsp2 = strip_tool_tags(full_response).strip()
                             for d_tc2 in dsml_calls2:
                                 tr_content2 = execute_tool_call(d_tc2, current_chat_id)
                                 dsml_followup_msgs.append({'role': 'tool', 'content': tr_content2, 'tool_call_id': f'dsml2_{uuid.uuid4().hex[:8]}'})
