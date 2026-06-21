@@ -1914,7 +1914,7 @@ def api_chat_stream():
                     is_greeting = any(kw in user_message.lower() for kw in ['hola', 'buenos días', 'buenas tardes', 'buenas noches', 'hey', 'saludos', 'qué tal', 'cómo estás', 'hello', 'hi'])
                     min_length = 3 if is_greeting else 10
                     
-                    if (force_basic and not is_empty_json) or (base_stripped and len(base_stripped) >= min_length and not looks_like_tool_attempt and not is_weak_answer and not is_empty_json):
+                    if force_basic or (base_stripped and len(base_stripped) >= min_length and not looks_like_tool_attempt and not is_weak_answer):
                         # Base model succeeded - use its response
                         full_response = base_full_response
                         prompt_tokens = base_prompt_tokens
