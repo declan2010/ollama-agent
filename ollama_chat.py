@@ -1899,12 +1899,14 @@ def api_chat_stream():
                     ]
                     base_lower = base_stripped.lower()
                     is_weak_answer = any(p in base_lower for p in weak_answer_patterns)
+                    # Reject empty JSON or tool-like responses
+                    is_empty_json = base_stripped in ('{}', '[]', '{', '[', '""', "''")
 
                     # Check if response is valid - for short greetings allow shorter responses
                     is_greeting = any(kw in user_message.lower() for kw in ['hola', 'buenos días', 'buenas tardes', 'buenas noches', 'hey', 'saludos', 'qué tal', 'cómo estás', 'hello', 'hi'])
                     min_length = 3 if is_greeting else 10
                     
-                    if force_basic or (base_stripped and len(base_stripped) >= min_length and not looks_like_tool_attempt and not is_weak_answer):
+                    if (force_basic and not is_empty_json) or (base_stripped and len(base_stripped) >= min_length and not looks_like_tool_attempt and not is_weak_answer and not is_empty_json):
                         # Base model succeeded - use its response
                         full_response = base_full_response
                         prompt_tokens = base_prompt_tokens
