@@ -1999,6 +1999,37 @@ def api_chat_stream():
                         prompt_tokens = chunk.get('prompt_eval_count', 0)
                         eval_count = chunk.get('eval_count', 0)
 
+                        # Check content buffer for JSON tool calls before processing tool_calls_buffer
+                        if content_buffer:
+                            content_buffer_stripped = content_buffer.strip()
+                            cleaned_buffer = re.sub(r'</?arg_value>', '', content_buffer_stripped)
+                            cleaned_buffer = re.sub(r'</?tool_call[^>]*>', '', cleaned_buffer).strip()
+                            json_tc_match = JSON_TOOL_PATTERN.search(cleaned_buffer)
+                            if not json_tc_match:
+                                json_tc_match = JSON_TOOL_PATTERN_SINGLE.search(cleaned_buffer)
+                            if json_tc_match:
+                                tool_name = json_tc_match.group(1)
+                                params_str = json_tc_match.group(2)
+                                try:
+                                    params = json.loads(params_str)
+                                except json.JSONDecodeError:
+                                    try:
+                                        params = json.loads(params_str.replace("'", '"'))
+                                    except json.JSONDecodeError:
+                                        params = {}
+                                json_tc = {'function': {'name': tool_name, 'arguments': params}}
+                                logger.info("Detected buffered JSON tool call: %s(%s)", tool_name, params)
+                                full_response = full_response.replace(content_buffer, '').strip()
+                                tool_calls_buffer.append(json_tc)
+                                content_buffer = ''
+                            else:
+                                flushed = content_buffer
+                                content_buffer = ''
+                                full_response = full_response[:-len(flushed)] if full_response.endswith(flushed) else full_response
+                                full_response += flushed
+                                sse_data = json.dumps({'type': 'token', 'content': flushed, 'ts': round(time.time() - start_time, 2)})
+                                yield f"data: {sse_data}\n\n"
+
                         # If we have pending tool calls, process them
                         # IMPORTANT: Merge streaming fragments first — Ollama sends
                         # tool calls incrementally, so we may have multiple partial
@@ -2086,7 +2117,6 @@ def api_chat_stream():
                                 cmd = func_args.get('command', '')
                                 if tc.get('function', {}).get('name') == 'local_command' and is_write_command(cmd):
                                     # Extract file path from the write command
-                                    import re
                                     m = re.search(r'>([^<]+)\s*$', cmd.strip())
                                     if not m:
                                         m = re.search(r'cat\s+>([^\s]+)', cmd)
@@ -2433,7 +2463,6 @@ def api_chat_stream():
                         if not tool_calls_buffer:
                             # Filter out tool call artifacts that some models emit as text
                             # Matches patterns like "model:tool_call" or "model:tool_call\nextra text"
-                            import re
                             stripped = content.strip()
                             if re.match(r'^[\w.-]+:tool_call', stripped):
                                 full_response += ''
@@ -2465,38 +2494,6 @@ def api_chat_stream():
                             # Send SSE event
                             sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
                             yield f"data: {sse_data}\n\n"
-
-                # Handle content buffer - was it a JSON tool call?
-                if content_buffer:
-                    content_buffer_stripped = content_buffer.strip()
-                    # Clean XML tags that some models mix with JSON (e.g. </tool_call>)
-                    import re as _re_clean
-                    cleaned_buffer = _re_clean.sub(r'</?arg_value>', '', content_buffer_stripped)
-                    cleaned_buffer = _re_clean.sub(r'</?tool_call[^>]*>', '', cleaned_buffer).strip()
-                    json_tc_match = JSON_TOOL_PATTERN.search(cleaned_buffer)
-                    if not json_tc_match:
-                        json_tc_match = JSON_TOOL_PATTERN_SINGLE.search(cleaned_buffer)
-                    if json_tc_match:
-                        tool_name = json_tc_match.group(1)
-                        params_str = json_tc_match.group(2)
-                        try:
-                            params = json.loads(params_str)
-                        except json.JSONDecodeError:
-                            try:
-                                params = json.loads(params_str.replace("'", '"'))
-                            except json.JSONDecodeError:
-                                params = {}
-                        json_tc = {'function': {'name': tool_name, 'arguments': params}}
-                        logger.info("Detected buffered JSON tool call: %s(%s)", tool_name, params)
-                        full_response = full_response.replace(content_buffer, '').strip()
-                        tool_calls_buffer.append(json_tc)
-                    else:
-                        flushed = content_buffer
-                        content_buffer = ''
-                        full_response = full_response[:-len(flushed)] if full_response.endswith(flushed) else full_response
-                        full_response += flushed
-                        sse_data = json.dumps({'type': 'token', 'content': flushed, 'ts': round(time.time() - start_time, 2)})
-                        yield f"data: {sse_data}\n\n"
 
                 # Check for DSML-style tool calls in the response (some models use DSML instead of native Ollama tool calls)
                 if full_response and not tool_calls_buffer:
