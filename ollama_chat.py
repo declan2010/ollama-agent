@@ -1697,7 +1697,9 @@ def api_chat_stream():
                     try:
                         if base_stripped.startswith('{'):
                             potential_json = json.loads(base_stripped)
-                            if 'tool' in potential_json and 'arguments' in potential_json:
+                            if 'tool' in potential_json:
+                                args = potential_json.get('arguments') or potential_json.get('parameters') or {}
+                                potential_json['arguments'] = args
                                 tool_call_json = potential_json
                     except (json.JSONDecodeError, ValueError):
                         pass
