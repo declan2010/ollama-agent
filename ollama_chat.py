@@ -1341,6 +1341,19 @@ def api_chat_stream():
     if not base_model:
         base_model = BASE_CHAT_MODEL
 
+    # Validate base_model exists, fall back to default if not
+    try:
+        import urllib.request as _urllib_validate
+        vresp = _urllib_validate.urlopen(f'{OLLAMA_BASE_URL}/api/tags')
+        vdata = json.loads(vresp.read().decode('utf-8'))
+        available_models = [m.get('name', '') for m in vdata.get('models', [])]
+        model_matches = any(base_model == m or base_model + ':latest' == m or m.startswith(base_model) for m in available_models)
+        if not model_matches:
+            logger.warning("Base model '%s' not found in available models, falling back to %s", base_model, BASE_CHAT_MODEL)
+            base_model = BASE_CHAT_MODEL
+    except Exception:
+        pass
+
     if not user_message:
         return jsonify({'error': 'Empty message'}), 400
 
