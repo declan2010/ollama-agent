@@ -1238,11 +1238,14 @@ def _likely_needs_tools(message):
         'commit', 'hacer commit', 'base de datos', 'sql', 'query',
         'permisos', 'chmod', 'matar proceso', 'kill process',
         'código', 'codigo', 'programación', 'programacion', 'programar',
+        'programando', 'codificando', 'coding',
         'desarrollar', 'implementar', 'función', 'funcion', 'clase', 'método',
         'variable', 'bug', 'error', 'debug', 'depurar', 'refactorizar',
         'api', 'servidor', 'server', 'endpoint', 'webhook',
         'docker', 'contenedor', 'deploy', 'testing', 'test',
         'script', 'bash', 'python', 'javascript', 'html', 'css', 'json',
+        'continua con', 'continuá con', 'seguí con', 'sigue con',
+        'seguir con', 'continuar con', 'proseguir', 'proseguí',
         # English
         'file', 'folder', 'directory', 'delete', 'remove file', 'edit file',
         'modify', 'create file', 'install', 'execute', 'run command',
@@ -1347,6 +1350,7 @@ def api_chat_stream():
     base_model = data.get('base_model', '')
     force_advanced = data.get('force_advanced', False)
     force_basic = data.get('force_basic', False)
+    logger.info("STREAM REQUEST force_basic=%s (raw=%s, type=%s) force_advanced=%s (raw=%s)", force_basic, repr(data.get('force_basic')), type(data.get('force_basic')).__name__, force_advanced, repr(data.get('force_advanced')))
     if not base_model:
         base_model = BASE_CHAT_MODEL
 
@@ -1446,14 +1450,32 @@ def api_chat_stream():
                     break
 
 
+            # Context-aware routing: if previous messages used tools or advanced model, escalate continuation messages
+            _context_needs_advanced = False
+            for _prev_msg in session_data['messages'][-6:]:
+                _prev_content = _prev_msg.get('content', '')
+                if _prev_msg.get('role') == 'assistant' and (
+                    '"tool"' in _prev_content or '"function"' in _prev_content or
+                    'local_command' in _prev_content or 'web_search' in _prev_content
+                ):
+                    _context_needs_advanced = True
+                    break
+            
+            if _context_needs_advanced and not force_basic:
+                logger.info("Context-aware routing: previous messages used tools/code, escalating to advanced model %s", model)
+
             # Detect simple messages that don't need tools
             simple_greetings = ['hola', 'hello', 'hi', 'hey', 'buenos días', 'buenas tardes', 'buenas noches', 'qué tal', 'como estas', 'cómo estás', 'how are you', 'sup', 'saludos', 'gracias', 'thanks', 'thank you', 'bye', 'adiós', 'chao', 'ok', 'si', 'no', 'yes', 'nope']
             is_simple = user_message.strip().lower() in simple_greetings or len(user_message.strip()) < 15 and not any(kw in user_message.lower() for kw in ['archivo', 'file', 'crear', 'create', 'leer', 'read', 'listar', 'list', 'buscar', 'search', 'comando', 'command', 'ejecutar', 'run', 'directorio', 'directory', 'proyecto', 'project', 'analizar', 'analyze', 'carpeta', 'folder', 'escribir', 'write', 'editar', 'edit'])
 
+            # Context override: if previous messages used tools, this is not simple
+            if _context_needs_advanced:
+                is_simple = False
+
             if is_simple:
                 system_content = 'You are a helpful assistant. Respond naturally and concisely. Always respond in the same language the user writes in. Your model name is: ' + model
             else:
-                system_content = 'You are a helpful assistant. IMPORTANT RULES:\n- For simple greetings, questions, or casual conversation, respond naturally WITHOUT using any tools. Only use tools when the user explicitly asks you to do something that requires them (like reading files, searching the web, or running commands).\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- TOOL CALLING FORMAT: When you need to use a tool, respond using the native function calling format provided by the system. The tools are already defined for you in the API. Simply select the appropriate tool and provide the required parameters. Do NOT output XML like <dsml:invoke> or JSON tool calls in text.\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model + '\n- IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'
+                system_content = 'You are a helpful assistant with access to tools. IMPORTANT RULES:\n- You MUST use tools to gather information when asked about files, system state, or to perform actions. Do NOT say you will do something - USE the tool to DO it.\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- CRITICAL: When someone says things like "revisa", "lee", "muestra", "chequea", "ver", "check", "look", "see" you MUST immediately use the appropriate tool to DO IT. Do NOT say "let me check" without using the tool - USE THE TOOL RIGHT AWAY.\n- TOOL CALLING FORMAT: Use the native function calling format. Select the appropriate tool and provide the required parameters. Do NOT output XML or JSON as text.\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model + '\n- IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'
             if model_hint:
                 system_content += '\n\n' + model_hint
             api_messages.append({
@@ -1558,7 +1580,7 @@ def api_chat_stream():
             # --- Base model routing: try simpler model first for simple conversations ---
             base_model_succeeded = False
             
-            if not force_advanced and (force_basic or not _likely_needs_tools(user_message)):
+            if not force_advanced and not _context_needs_advanced and (force_basic or not _likely_needs_tools(user_message)):
                 try:
                     import urllib.request as _urllib_base
                     
@@ -1625,6 +1647,7 @@ def api_chat_stream():
                     )
                     base_full_response = ""
                     base_prompt_tokens = 0
+                    base_is_thinking = False
                     with _urllib_base.urlopen(base_req) as base_response:
                         base_tool_calls_buffer = []
                         for base_line in base_response:
@@ -1640,6 +1663,16 @@ def api_chat_stream():
                                 base_eval_count = base_chunk.get('eval_count', 0)
                                 break
                             base_msg = base_chunk.get('message', {})
+                            # Handle thinking tokens from models like deepseek
+                            base_thinking = base_msg.get('thinking', '') or base_chunk.get('thinking', '')
+                            if base_thinking and not base_msg.get('content'):
+                                if not base_is_thinking:
+                                    base_is_thinking = True
+                                    yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
+                                continue
+                            elif base_is_thinking and base_msg.get('content'):
+                                base_is_thinking = False
+                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
                             # Collect native tool calls from Ollama
                             if base_msg.get('tool_calls'):
                                 for tc in base_msg['tool_calls']:
@@ -1988,6 +2021,8 @@ def api_chat_stream():
                 'tools': [] if is_simple else OLLAMA_TOOLS,
             }
 
+            logger.info("Advanced model payload: model=%s, is_simple=%s, tools_count=%d", model, is_simple, len(payload.get('tools', [])))
+
             import urllib.request
 
             data_bytes = json.dumps(payload).encode('utf-8')
@@ -2002,6 +2037,7 @@ def api_chat_stream():
                 tool_calls_buffer = []
                 current_tool_call = None
                 content_buffer = ''
+                is_thinking = False
 
                 for line in response:
                     line = line.decode('utf-8').strip()
@@ -2013,6 +2049,8 @@ def api_chat_stream():
                         continue
 
                     if chunk.get('done'):
+                        logger.info("Stream done: content_len=%d, tool_calls=%d, had_thinking=%s, is_thinking=%s",
+                                    len(full_response), len(tool_calls_buffer), is_thinking, is_thinking)
                         # Capture eval counts
                         prompt_tokens = chunk.get('prompt_eval_count', 0)
                         eval_count = chunk.get('eval_count', 0)
@@ -2183,7 +2221,10 @@ def api_chat_stream():
                                         })
                                 logger.info("Follow-up round %d: sending %d tool results back to %s", round_num + 1, len(tool_results), model)
                                 followup_result = send_to_ollama(model, followup_messages, tools_for_this_round, stream=False)
-                                logger.info("Follow-up response: content_len=%d, has_tool_calls=%s", len(followup_result.get('message', {}).get('content', '')), bool(followup_result.get('message', {}).get('tool_calls')))
+                                logger.info("Follow-up response: content_len=%d, has_tool_calls=%s, thinking=%s",
+                                           len(followup_result.get('message', {}).get('content', '')),
+                                           bool(followup_result.get('message', {}).get('tool_calls')),
+                                           bool(followup_result.get('message', {}).get('thinking', '')))
 
                                 if 'error' in followup_result:
                                     full_response = f"Error: {followup_result['error']}"
@@ -2466,6 +2507,17 @@ def api_chat_stream():
                         break
 
                     msg = chunk.get('message', {})
+
+                    # Handle thinking tokens from models like deepseek
+                    thinking_content = msg.get('thinking', '') or chunk.get('thinking', '')
+                    if thinking_content and not msg.get('content') and not msg.get('tool_calls'):
+                        if not is_thinking:
+                            is_thinking = True
+                            yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
+                        continue
+                    elif is_thinking and (msg.get('content') or msg.get('tool_calls')):
+                        is_thinking = False
+                        yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
 
                     # Handle tool calls in streaming
                     if msg.get('tool_calls'):

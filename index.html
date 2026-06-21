@@ -679,6 +679,15 @@
             40% { transform: scale(1); }
         }
 
+        @keyframes thinkingPulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+
+        .thinking-dots {
+            animation: thinkingPulse 1.5s ease-in-out infinite;
+        }
+
         /* Streaming cursor */
         .streaming-cursor::after {
             content: '▊';
@@ -873,7 +882,7 @@
                         <option value="{{ model }}" {% if model == 'gemma4:e4b' %}selected{% endif %}>{{ model }}</option>
                         {% endfor %}
                     </select>
-                    <input type="checkbox" id="forceBasic" title="Force Basic model only (no escalation)" style="cursor:pointer;">
+                    <input type="checkbox" id="forceBasic" title="Force Basic model only (no escalation)" style="cursor:pointer;" autocomplete="off">
                     <label for="forceBasic" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Basic model, never escalate to Agent">Force</label>
                 </div>
                 <div class="model-selector" id="advancedModelContainer">
@@ -883,7 +892,7 @@
                         <option value="{{ model }}" {% if model == current_model %}selected{% endif %}>{{ model }}</option>
                         {% endfor %}
                     </select>
-                    <input type="checkbox" id="forceAdvanced" title="Force Advanced model with tools" style="cursor:pointer;">
+                    <input type="checkbox" id="forceAdvanced" title="Force Advanced model with tools" style="cursor:pointer;" autocomplete="off">
                     <label for="forceAdvanced" style="cursor:pointer;font-size:0.75rem;white-space:nowrap;" title="Always use Advanced model with tools">Force</label>
                 </div>
                 <div class="model-selector" id="fallbackModelContainer">
@@ -1971,6 +1980,9 @@
                             const data = JSON.parse(trimmed.slice(6));
 
                             if (data.type === 'token') {
+                                // Remove thinking indicator when real content arrives
+                                const thinkingEl = document.getElementById('thinkingIndicator');
+                                if (thinkingEl) thinkingEl.remove();
                                 fullResponse += data.content;
                                 if (contentEl) {
                                     // Throttled markdown rendering to prevent jitter during streaming
@@ -2006,6 +2018,21 @@
                                 // Highlight the active model select in header - ALWAYS show, even during auto-escalation
                                 if (data.route) {
                                     highlightActiveModelSelect(data.route, data.model, false);
+                                }
+                            } else if (data.type === 'thinking') {
+                                // Show/hide thinking indicator
+                                const thinkingEl = document.getElementById('thinkingIndicator');
+                                if (data.status === 'thinking') {
+                                    if (!thinkingEl) {
+                                        const thinkDiv = document.createElement('div');
+                                        thinkDiv.id = 'thinkingIndicator';
+                                        thinkDiv.className = 'message assistant';
+                                        thinkDiv.innerHTML = '<div class="message-content" style="color:var(--text-secondary);font-style:italic;"><span class="thinking-dots">🧠 Thinking...</span></div>';
+                                        chatArea.appendChild(thinkDiv);
+                                        chatArea.scrollTop = chatArea.scrollHeight;
+                                    }
+                                } else {
+                                    if (thinkingEl) thinkingEl.remove();
                                 }
                             } else if (data.type === 'write_executed') {
                                 // Show notification of write commands executed
@@ -2285,6 +2312,8 @@
                 if (this.checked) forceAdvCb.checked = false;
             });
         }
+        if (forceBasicCb) forceBasicCb.checked = false;
+        if (forceAdvCb) forceAdvCb.checked = false;
     </script>
 
     <!-- Version badge -->
