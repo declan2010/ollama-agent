@@ -29,6 +29,7 @@ LOCAL_MODELS_WITH_TOOLS = [
     'gemma4', 'gemma3', 'gemma2',
     'llama3.2', 'llama3.1', 'llama3',
     'nemotron', 'dolphin',
+    'north-mini-code',
 ]
 
 def local_model_supports_tools(model_name):
@@ -1014,7 +1015,7 @@ def index():
     local_models = [m for m in all_models if ':cloud' not in m and '-cloud' not in m and not m.startswith('x/') and 'embed' not in m.lower()]
     cloud_models = [m for m in all_models if ':cloud' in m or '-cloud' in m]
     if not local_models:
-        local_models = ['gemma4:e4b']  # fallback default
+        local_models = ['gemma4:e4b', 'north-mini-code-1.0']  # fallback defaults
     if not cloud_models:
         cloud_models = all_models  # fallback: show all if no cloud models
 
@@ -1403,7 +1404,7 @@ def api_chat_stream():
                     break
 
 
-            system_content = 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model + '\n- IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'
+            system_content = 'You are an assistant with access to tools. IMPORTANT RULES:\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- TOOL CALLING FORMAT: When you need to use a tool, respond using the native function calling format provided by the system. The tools are already defined for you in the API. Simply select the appropriate tool and provide the required parameters. Do NOT output XML like <dsml:invoke> or JSON tool calls in text.\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model + '\n- IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'
             if model_hint:
                 system_content += '\n\n' + model_hint
             api_messages.append({
