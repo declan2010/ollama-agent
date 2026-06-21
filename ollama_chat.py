@@ -798,6 +798,8 @@ def strip_tool_tags(text):
 # JSON tool call format: {"tool": "name", "parameters": {...}} or {"tool": "name", "arguments": {...}}
 JSON_TOOL_PATTERN = re.compile(r'\{\s*"tool"\s*:\s*"(\w+)"\s*,\s*"(?:parameters|arguments)"\s*:\s*(\{.*?\})\s*\}', re.DOTALL)
 JSON_TOOL_STRIP = re.compile(r'\{\s*"tool"\s*:\s*"[^"]*"\s*,\s*"(?:parameters|arguments)"\s*:\s*\{.*?\}\s*\}')
+# Single-quoted JSON variant: {'tool': 'name', 'arguments': {...}}
+JSON_TOOL_PATTERN_SINGLE = re.compile(r"\{\s*'tool'\s*:\s*'(\w+)'\s*,\s*'(?:parameters|arguments)'\s*:\s*(\{.*?\})\s*\}", re.DOTALL)
 
 def parse_dsml_calls(text):
     """Extract DSML-style or JSON tool invocations from model response text."""
@@ -1968,6 +1970,7 @@ def api_chat_stream():
             with urllib.request.urlopen(req, timeout=600) as response:
                 tool_calls_buffer = []
                 current_tool_call = None
+                content_buffer = ''
 
                 for line in response:
                     line = line.decode('utf-8').strip()
@@ -2144,6 +2147,29 @@ def api_chat_stream():
                                             followup_messages.append({'role': 'tool', 'content': tr, 'tool_call_id': f'fu_dsml_{uuid.uuid4().hex[:8]}'})
                                         continue
                                     full_response = followup_content
+                                    # Check if the follow-up content is actually a JSON/DSML tool call
+                                    _fu_stripped = followup_content.strip()
+                                    # Clean XML tags
+                                    _fu_cleaned = re.sub(r'</?arg_value>', '', _fu_stripped)
+                                    _fu_cleaned = re.sub(r'</?tool_call[^>]*>', '', _fu_cleaned).strip()
+                                    _fu_json_match = JSON_TOOL_PATTERN.search(_fu_cleaned)
+                                    if not _fu_json_match:
+                                        _fu_json_match = JSON_TOOL_PATTERN_SINGLE.search(_fu_cleaned)
+                                    if _fu_json_match:
+                                        _fu_tn = _fu_json_match.group(1)
+                                        _fu_ps = _fu_json_match.group(2)
+                                        try:
+                                            _fu_params = json.loads(_fu_ps)
+                                        except json.JSONDecodeError:
+                                            try:
+                                                _fu_params = json.loads(_fu_ps.replace("'", '"'))
+                                            except json.JSONDecodeError:
+                                                _fu_params = {}
+                                        logger.info("Follow-up content is JSON tool call: %s(%s)", _fu_tn, _fu_params)
+                                        followup_messages.append({'role': 'assistant', 'content': '', 'tool_calls': [{'function': {'name': _fu_tn, 'arguments': _fu_params}}]})
+                                        _fu_tr = execute_tool_call({'function': {'name': _fu_tn, 'arguments': _fu_params}}, current_chat_id)
+                                        followup_messages.append({'role': 'tool', 'content': _fu_tr, 'tool_call_id': f'fu_json_{uuid.uuid4().hex[:8]}'})
+                                        continue
                                     yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                                     prompt_tokens = followup_result.get('prompt_eval_count', prompt_tokens)
                                     break  # Got a text response, done
@@ -2399,10 +2425,65 @@ def api_chat_stream():
                             if re.match(r'^[\w.-]+:tool_call', stripped):
                                 full_response += ''
                                 continue
+                            # Buffer content that looks like a JSON tool call
+                            if not content_buffer and stripped.startswith('{'):
+                                content_buffer = content
+                                full_response += content
+                                continue
+                            if content_buffer:
+                                content_buffer += content
+                                full_response += content
+                                try:
+                                    parsed = json.loads(content_buffer.strip())
+                                    if isinstance(parsed, dict) and 'tool' in parsed:
+                                        continue
+                                except json.JSONDecodeError:
+                                    if not content_buffer.strip().startswith('{'):
+                                        flushed = content_buffer
+                                        content_buffer = ''
+                                        full_response = full_response[:-len(flushed)] if full_response.endswith(flushed) else full_response
+                                        full_response += flushed
+                                        sse_data = json.dumps({'type': 'token', 'content': flushed, 'ts': round(time.time() - start_time, 2)})
+                                        yield f"data: {sse_data}\n\n"
+                                        continue
+                                    # Still starts with '{, keep buffering silently
+                                    continue
                             full_response += content
                             # Send SSE event
                             sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
                             yield f"data: {sse_data}\n\n"
+
+                # Handle content buffer - was it a JSON tool call?
+                if content_buffer:
+                    content_buffer_stripped = content_buffer.strip()
+                    # Clean XML tags that some models mix with JSON (e.g. </tool_call>)
+                    import re as _re_clean
+                    cleaned_buffer = _re_clean.sub(r'</?arg_value>', '', content_buffer_stripped)
+                    cleaned_buffer = _re_clean.sub(r'</?tool_call[^>]*>', '', cleaned_buffer).strip()
+                    json_tc_match = JSON_TOOL_PATTERN.search(cleaned_buffer)
+                    if not json_tc_match:
+                        json_tc_match = JSON_TOOL_PATTERN_SINGLE.search(cleaned_buffer)
+                    if json_tc_match:
+                        tool_name = json_tc_match.group(1)
+                        params_str = json_tc_match.group(2)
+                        try:
+                            params = json.loads(params_str)
+                        except json.JSONDecodeError:
+                            try:
+                                params = json.loads(params_str.replace("'", '"'))
+                            except json.JSONDecodeError:
+                                params = {}
+                        json_tc = {'function': {'name': tool_name, 'arguments': params}}
+                        logger.info("Detected buffered JSON tool call: %s(%s)", tool_name, params)
+                        full_response = full_response.replace(content_buffer, '').strip()
+                        tool_calls_buffer.append(json_tc)
+                    else:
+                        flushed = content_buffer
+                        content_buffer = ''
+                        full_response = full_response[:-len(flushed)] if full_response.endswith(flushed) else full_response
+                        full_response += flushed
+                        sse_data = json.dumps({'type': 'token', 'content': flushed, 'ts': round(time.time() - start_time, 2)})
+                        yield f"data: {sse_data}\n\n"
 
                 # Check for DSML-style tool calls in the response (some models use DSML instead of native Ollama tool calls)
                 if full_response and not tool_calls_buffer:
