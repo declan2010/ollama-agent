@@ -1008,14 +1008,14 @@
     </div>
 
     <div class="modal-overlay" id="writePermissionModal">
-        <div class="modal" style="min-width: 400px;">
+        <div class="modal" style="min-width: 350px; max-width: 95%; max-height: 90vh; overflow-y: auto;">
             <div class="modal-header">
                 <h2>\u26a0\ufe0f Write Permission Required</h2>
                 <button onclick="handleWritePermission('deny')" style="background:none;border:none;color:var(--text-secondary);font-size:1.5rem;cursor:pointer;padding:0 4px;" title="Cerrar">&times;</button>
             </div>
             <div style="padding: 15px 0;">
                 <p style="color: var(--text-primary); margin-bottom: 8px;">The assistant wants to run:</p>
-                <pre id="writePermissionCommand" style="background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; font-family: 'Courier New', monospace; font-size: 0.9rem; color: var(--accent); margin-bottom: 20px;"></pre>
+                <pre id="writePermissionCommand" style="background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; overflow-y: auto; max-height: 200px; font-family: 'Courier New', monospace; font-size: 0.9rem; color: var(--accent); margin-bottom: 20px; word-break: break-all; white-space: pre-wrap;"></pre>
                 <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 20px;">This command will modify files or system state.</p>
                 <div style="display: flex; flex-direction: column; gap: 10px;">
                     <button onclick="handleWritePermission('session')" style="background: #22c55e; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: bold;">
@@ -1524,7 +1524,13 @@
 
         // Close write permission modal on outside click
         document.getElementById('writePermissionModal').addEventListener('click', function(e) {
-            // Don't close on outside click - user must choose an option
+            if (e.target === this) handleWritePermission('deny');
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                const modal = document.getElementById('writePermissionModal');
+                if (modal.classList.contains('active')) handleWritePermission('deny');
+            }
         });
 
         async function clearAllChats() {
