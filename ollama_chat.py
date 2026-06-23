@@ -2560,6 +2560,11 @@ def api_chat_stream():
                             if re.match(r'^[\w.-]+:tool_call', stripped):
                                 full_response += ''
                                 continue
+                            # Check if content contains a JSON tool call (gemma4 outputs JSON as text)
+                            if JSON_TOOL_PATTERN.search(stripped) or JSON_TOOL_PATTERN_SINGLE.search(stripped):
+                                content_buffer += content
+                                full_response += content
+                                continue
                             # Buffer content that looks like a JSON tool call
                             if not content_buffer and stripped.startswith('{'):
                                 content_buffer = content
