@@ -2055,6 +2055,29 @@ def api_chat_stream():
                         prompt_tokens = chunk.get('prompt_eval_count', 0)
                         eval_count = chunk.get('eval_count', 0)
 
+                        # Check full response for JSON tool calls (models like gemma4 output JSON as text)
+                        if not tool_calls_buffer and full_response:
+                            full_stripped = full_response.strip()
+                            cleaned_full = re.sub(r'</?arg_value>', '', full_stripped)
+                            cleaned_full = re.sub(r'</?tool_call[^>]*>', '', cleaned_full).strip()
+                            json_tc_match = JSON_TOOL_PATTERN.search(cleaned_full)
+                            if not json_tc_match:
+                                json_tc_match = JSON_TOOL_PATTERN_SINGLE.search(cleaned_full)
+                            if json_tc_match:
+                                tool_name = json_tc_match.group(1)
+                                params_str = json_tc_match.group(2)
+                                try:
+                                    params = json.loads(params_str)
+                                except json.JSONDecodeError:
+                                    try:
+                                        params = json.loads(params_str.replace("'", '"'))
+                                    except json.JSONDecodeError:
+                                        params = {}
+                                json_tc = {'function': {'name': tool_name, 'arguments': params}}
+                                logger.info("Detected JSON tool call in full response: %s(%s)", tool_name, params)
+                                full_response = JSON_TOOL_STRIP.sub('', full_response).strip()
+                                tool_calls_buffer.append(json_tc)
+
                         # Check content buffer for JSON tool calls before processing tool_calls_buffer
                         if content_buffer:
                             content_buffer_stripped = content_buffer.strip()
