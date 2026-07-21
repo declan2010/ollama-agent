@@ -1824,7 +1824,7 @@ def api_chat_stream():
             # --- Base model routing: try simpler model first for simple conversations ---
             base_model_succeeded = False
             
-            if not force_advanced and not _context_needs_advanced and (force_basic or not _likely_needs_tools(user_message)):
+            if force_basic or (not force_advanced and not _context_needs_advanced and not _likely_needs_tools(user_message)):
                 try:
                     import urllib.request as _urllib_base
                     
@@ -2193,8 +2193,16 @@ def api_chat_stream():
             elif force_advanced:
                 logger.info("Force advanced mode: skipping base model, using %s directly", model)
             elif force_basic:
-                # Force basic mode: base model was used, skip advanced model
-                pass
+                # Force basic mode — should always reach base model block above,
+                # but as safety net, use base model result if available
+                if base_full_response:
+                    full_response = base_full_response
+                    prompt_tokens = base_prompt_tokens
+                    used_model = base_model
+                    base_model_succeeded = True
+                    logger.info("Force basic safety net: using base model response (len=%d)", len(base_full_response))
+                else:
+                    logger.warning("Force basic mode but no base model response available")
             elif _likely_needs_tools(user_message):
                 logger.info("Query likely needs tools: skipping base model, using %s directly", model)
 
