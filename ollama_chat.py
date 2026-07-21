@@ -399,7 +399,23 @@ def check_write_permission(cmd, session_id):
     """Check if a write command is allowed for this session.
     Returns 'allowed' if the command can proceed, or 'ask' if permission is needed."""
     perm = _session_write_permissions.get(session_id, 'none')
-    if perm == 'session':
+
+    # Even with 'session' permission, require re-approval for high-risk commands
+    cmd_lower = cmd.lower()
+    HIGH_RISK_PATTERNS = [
+        'rm -rf', 'rm -r', 'rm --recursive',
+        'chmod 6', 'chmod 7', 'chmod 0',
+        'chown', 'mkfs', 'fdisk', 'parted', 'mkswap',
+        'kill -9', 'pkill', 'systemctl',
+        'apt remove', 'apt purge', 'dpkg --purge', 'dpkg -r',
+        'pip uninstall', 'pip3 uninstall',
+        '> /etc/', '> /boot/', '> /usr/',
+        'mv /* ', 'mv /bin', 'mv /usr', 'mv /etc', 'mv /boot',
+        'dd if=', 'dd of=',
+    ]
+    is_high_risk = any(p in cmd_lower for p in HIGH_RISK_PATTERNS)
+
+    if perm == 'session' and not is_high_risk:
         return 'allowed'
     elif perm == 'once':
         # Allow once, then reset
@@ -407,8 +423,7 @@ def check_write_permission(cmd, session_id):
         return 'allowed'
     else:
         # Auto-approve HTML files in /tmp and /home/cvc1 for previews (no popup needed)
-        cmd_lower = cmd.lower()
-        if any(ext in cmd_lower for ext in ['.html\u003c', '.htm\u003c', '.html ', '.htm ']) and \
+        if any(ext in cmd_lower for ext in ['.html<', '.htm<', '.html ', '.htm ']) and \
            any(loc in cmd_lower for loc in ['/tmp/', '/home/cvc1/', '/home/cvc/']):
             return 'allowed'
         return 'ask'
@@ -426,13 +441,38 @@ def execute_write_command(cmd, session_id):
 
         logger.info("execute_write_command: session=%s, cmd=%s", session_id, cmd[:300])
 
-        # For write commands, we execute with shell=True but with basic safety
-        # (the permission system is the safety gate)
-        # Still block truly catastrophic patterns
-        catastrophic = ['rm -rf /', 'mkfs', 'dd if=/dev/zero of=/dev/']
+        # Block catastrophic patterns regardless of permission level
+        catastrophic = [
+            'rm -rf /', 'rm -rf /*', 'rm -rf ~', 'rm -rf $HOME',
+            'mkfs', 'dd if=/dev/zero of=/dev/', 'dd if=/dev/random of=/dev/',
+            ':(){ :|:& };:',  # fork bomb
+            '> /dev/sda', '> /dev/sdb', '> /dev/sdc',
+            'chmod 0 /', 'chmod 000 /', 'chown 0:0 /',
+            'mv / ', 'mv /* ',
+            'wget ', 'curl ',  # remote downloads piped to shell (prevented via shell piping, but explicit is safer)
+        ]
+        cmd_lower = cmd.lower()
         for pattern in catastrophic:
-            if pattern in cmd:
+            if pattern in cmd_lower:
+                logger.warning("BLOCKED catastrophic command [session=%s]: %s", session_id, cmd[:200])
                 return "[Security] This command is blocked for safety."
+
+        # Even with session permission, require explicit approval for high-risk patterns
+        high_risk = [
+            'rm -rf', 'rm -r', 'rm --recursive',
+            'chmod 6', 'chmod 7', 'chmod 0',
+            'chown', 'mkfs', 'fdisk', 'parted', 'mkswap',
+            'kill -9', 'pkill', 'systemctl',
+            'apt remove', 'apt purge', 'dpkg --purge', 'dpkg -r',
+            'pip uninstall', 'pip3 uninstall',
+            '> /etc/', '> /boot/', '> /usr/',
+            'mv /* ', 'mv /bin', 'mv /usr', 'mv /etc', 'mv /boot',
+            'dd if=', 'dd of=',
+        ]
+        for pattern in high_risk:
+            if pattern in cmd_lower:
+                logger.warning("HIGH-RISK write command executed [session=%s]: %s", session_id, cmd[:200])
+                break
 
         # Special handling: intercept xdg-open of HTML files in compound commands
         # Split by && or ; to find xdg-open commands
@@ -624,6 +664,44 @@ def get_model_info(model_name):
     except Exception as e:
         logger.error("Failed to get model info for %s: %s", model_name, e)
         return {'error': str(e), 'model': model_name}
+
+
+def fix_double_encoding(text):
+    """Fix UTF-8 bytes that were incorrectly decoded as Latin-1 (double encoding).
+    
+    Some cloud model APIs return content where UTF-8 encoded characters
+    were decoded as Latin-1, producing garbled text like 'Ãº' instead of 'ú'.
+    This function detects and corrects those sequences character-by-character.
+    """
+    if not text:
+        return text
+    result = []
+    i = 0
+    while i < len(text):
+        c1 = ord(text[i])
+        # Check for 2-byte UTF-8 sequence misinterpreted as Latin-1
+        if 0xC2 <= c1 <= 0xDF and i + 1 < len(text):
+            c2 = ord(text[i + 1])
+            if 0x80 <= c2 <= 0xBF:
+                utf8_bytes = bytes([c1, c2])
+                result.append(utf8_bytes.decode('utf-8'))
+                i += 2
+                continue
+        # Check for 3-byte UTF-8 sequence misinterpreted as Latin-1
+        if 0xE0 <= c1 <= 0xEF and i + 2 < len(text):
+            c2 = ord(text[i + 1])
+            c3 = ord(text[i + 2])
+            if 0x80 <= c2 <= 0xBF and 0x80 <= c3 <= 0xBF:
+                try:
+                    utf8_bytes = bytes([c1, c2, c3])
+                    result.append(utf8_bytes.decode('utf-8'))
+                    i += 3
+                    continue
+                except UnicodeDecodeError:
+                    pass
+        result.append(text[i])
+        i += 1
+    return ''.join(result)
 
 
 def send_to_ollama(model, messages, tools=None, stream=False):
@@ -829,46 +907,46 @@ def parse_dsml_calls(text):
                 calls.append({'name': name, 'arguments': {}})
     return calls
 
-def execute_tool_call(tc, current_chat_id=''):
-    """Execute a tool call (from DSML or native format) and return result string."""
-    func_name = tc.get('name', tc.get('function', {}).get('name', ''))
-    args = tc.get('arguments', {})
-    if isinstance(args, str):
-        try:
-            args = json.loads(args)
-        except json.JSONDecodeError:
-            args = {}
-    logger.info("Executing tool: %s(%s)", func_name, json.dumps(args))
-    if func_name == 'local_command':
-        cmd = args.get('command', '')
-        if is_write_command(cmd):
-            return execute_write_command(cmd, current_chat_id)
-        return execute_local_command(cmd)
-    elif func_name == 'web_search':
-        query = args.get('query', '')
-        results = web_search(query)
-        if results and isinstance(results, list) and 'error' in results[0]:
-            return f"Search error: {results[0]['error']}"
-        text = "Search results:\n\n"
-        for idx, r in enumerate(results[:5], 1):
-            text += f"{idx}. {r['title']}\n   URL: {r['url']}\n   {r['snippet']}\n\n"
-        return text
-    elif func_name == 'fetch_article':
-        url = args.get('url', '')
-        article = fetch_article(url)
-        if 'content' in article:
-            return f"Article from {url}:\n\n{article['content']}"
-        return f"Could not fetch article from {url}: {article.get('error', 'Unknown error')}"
-    return f"Unknown tool: {func_name}"
-
-
-# --- Ollama Tools Definition ---
-OLLAMA_TOOLS = [
-    {
+def build_tool_definitions(*, read_only=False, streaming=True):
+    """
+    Build tool definitions for Ollama function calling.
+    
+    Args:
+        read_only: If True, only read-only local_command (no write tool exposed).
+        streaming: If True, separate execute_write_command tool (for permission modal flow).
+                  If False, combined local_command handles both read/write (auto-execute path).
+    """
+    tools = []
+    
+    # local_command tool
+    if read_only:
+        local_cmd_desc = (
+            'Execute a read-only local system command. Returns output as string. '
+            'Examples: ls -la, cat file.txt, pwd, df -h, ps aux, grep pattern file, '
+            'head -n file, tail -n file, find . -name pattern, du -sh directory. '
+            'Do NOT use write commands (touch, mkdir, rm, cp, mv, chmod, echo >, cat >, tee, etc).'
+        )
+    elif streaming:
+        local_cmd_desc = (
+            'Execute a local system command (read-only, no shell). Returns output as string. '
+            'Examples: ls -la, cat file.txt, pwd, df -h, ps aux. '
+            'For write operations (creating files, editing, deleting, etc.), '
+            'use the execute_write_command function instead.'
+        )
+    else:
+        local_cmd_desc = (
+            'Execute a local system command. Supports both read-only commands '
+            '(ls, cat, find, grep, df, free, etc. - execute without confirmation) '
+            'and write commands (touch, mkdir, rm, cp, mv, chmod, etc. - '
+            'require user confirmation via popup). Write operations will pause '
+            'and ask the user for permission before executing.'
+        )
+    
+    tools.append({
         'type': 'function',
         'function': {
             'name': 'local_command',
-            'description': 'Execute a local system command. Supports both read-only commands (ls, cat, find, grep, df, free, etc. - execute without confirmation) and write commands (touch, mkdir, rm, cp, mv, chmod, etc. - require user confirmation via popup). Write operations will pause and ask the user for permission before executing.',
+            'description': local_cmd_desc,
             'parameters': {
                 'type': 'object',
                 'properties': {
@@ -880,42 +958,183 @@ OLLAMA_TOOLS = [
                 'required': ['command']
             }
         }
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'web_search',
-            'description': 'Search the internet for information. Returns title, URL, and snippet for each result. Use fetch_article separately to get full content from specific URLs when needed.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'query': {
-                        'type': 'string',
-                        'description': 'The search query to find information on the internet.'
-                    }
-                },
-                'required': ['query']
+    })
+    
+    # Separate write tool only in streaming mode
+    if streaming and not read_only:
+        tools.append({
+            'type': 'function',
+            'function': {
+                'name': 'execute_write_command',
+                'description': 'Execute a write command (requires user permission). Returns output as string.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'command': {
+                            'type': 'string',
+                            'description': 'The write command to execute. Examples: cat > file.txt, sed -i, echo "text" > file.txt.'
+                        }
+                    },
+                    'required': ['command'],
+                }
+            }
+        })
+    
+    # web_search + fetch_article (included in all modes)
+    tools.extend([
+        {
+            'type': 'function',
+            'function': {
+                'name': 'web_search',
+                'description': 'Search the internet for information. Returns title, URL, and snippet for each result. Use fetch_article separately to get full content from specific URLs when needed.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'query': {
+                            'type': 'string',
+                            'description': 'The search query to find information on the internet.'
+                        }
+                    },
+                    'required': ['query']
+                }
+            }
+        },
+        {
+            'type': 'function',
+            'function': {
+                'name': 'fetch_article',
+                'description': 'Fetch and extract the full text content from a web article URL. Use this after web_search to get detailed content from specific articles.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'url': {
+                            'type': 'string',
+                            'description': 'The URL of the article to fetch and extract content from'
+                        }
+                    },
+                    'required': ['url']
+                }
             }
         }
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'fetch_article',
-            'description': 'Fetch and extract the full text content from a web article URL. Use this after web_search to get detailed content from specific articles.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'url': {
-                        'type': 'string',
-                        'description': 'The URL of the article to fetch and extract content from'
-                    }
-                },
-                'required': ['url']
-            }
-        }
-    }
-]
+    ])
+    
+    return tools
+
+
+def execute_single_tool(tc_name, tc_args, session_id='', write_permission='ask', is_followup=False):
+    """
+    Execute a single tool call and return result string.
+    
+    Args:
+        tc_name: Tool function name (local_command, execute_write_command, web_search, fetch_article)
+        tc_args: Arguments dict for the tool
+        session_id: Chat session ID (for write permission tracking)
+        write_permission: Permission mode for writes - 'ask', 'approved', 'denied', 'read_only'
+        is_followup: If True, this is a follow-up round (different logging)
+    
+    Returns:
+        result string
+    """
+    logger.info("%s tool call: %s(%s)", 'Follow-up' if is_followup else 'Direct',
+                tc_name, json.dumps(tc_args))
+    
+    if tc_name == 'local_command':
+        cmd = tc_args.get('command', '')
+        if write_permission == 'read_only':
+            if is_write_command(cmd):
+                return "[Permission denied] Write commands are not allowed in this mode"
+            return execute_local_command(cmd)
+        elif is_write_command(cmd):
+            if write_permission == 'denied':
+                return "[Permission denied] Task cancelled"
+            # write_permission is 'approved' or 'ask' (handled upstream)
+            return execute_write_command(cmd, session_id)
+        else:
+            result = execute_local_command(cmd)
+            return result
+    
+    elif tc_name == 'execute_write_command':
+        cmd = tc_args.get('command', '')
+        if write_permission == 'denied':
+            return "[Permission denied] Task cancelled"
+        return execute_write_command(cmd, session_id)
+    
+    elif tc_name == 'web_search':
+        query = tc_args.get('query', '')
+        try:
+            results = web_search(query)
+            if results and isinstance(results, list):
+                if 'error' in results[0]:
+                    return f"Search error: {results[0]['error']}"
+                text = "Search results:\n\n"
+                for idx, r in enumerate(results[:5], 1):
+                    text += f"{idx}. {r['title']}\n   URL: {r['url']}\n   {r['snippet']}\n\n"
+                return text
+            return "No search results found"
+        except Exception as e:
+            logger.error("Web search error: %s", e)
+            return f"Search error: {str(e)}"
+    
+    elif tc_name == 'fetch_article':
+        url = tc_args.get('url', '')
+        article = fetch_article(url)
+        if 'content' in article:
+            return f"Article from {url}:\n\n{article['content']}"
+        return f"Could not fetch article from {url}: {article.get('error', 'Unknown error')}"
+    
+    return f"Unknown tool: {tc_name}"
+
+
+def execute_tool_call(tc, current_chat_id=''):
+    """Execute a tool call (from DSML or native format) and return result string."""
+    func_name = tc.get('name', tc.get('function', {}).get('name', ''))
+    args = tc.get('arguments', {})
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            args = {}
+    return execute_single_tool(func_name, args, current_chat_id, write_permission='approved')
+
+
+# --- Cleanup stale state ---
+def cleanup_stale_state():
+    """Periodic cleanup of stale permission requests and rate limit entries."""
+    now = time.time()
+    stale_cutoff = now - 600  # 10 minutes
+    # Clean stale pending permissions
+    stale_ids = [
+        perm_id for perm_id, pending in list(_pending_permissions.items())
+        if pending.get('created_at', 0) < stale_cutoff
+    ]
+    for perm_id in stale_ids:
+        logger.info("Cleaning stale permission request: %s", perm_id)
+        try:
+            pending = _pending_permissions.pop(perm_id, None)
+            if pending and not pending['q'].empty():
+                pending['q'].get_nowait()
+        except Exception:
+            pass
+    # Clean empty rate limit entries
+    empty_ips = [ip for ip, timestamps in list(_rate_limits.items()) if not timestamps]
+    for ip in empty_ips:
+        del _rate_limits[ip]
+
+
+# Schedule periodic cleanup
+try:
+    import threading
+    def _cleanup_loop():
+        while True:
+            time.sleep(300)  # every 5 minutes
+            try:
+                cleanup_stale_state()
+            except Exception:
+                pass
+    _cleanup_thread = threading.Thread(target=_cleanup_loop, daemon=True)
+    _cleanup_thread.start()
+except Exception:
+    pass
 
 
 # --- Web Search & Article Fetching ---
@@ -1304,6 +1523,24 @@ def _likely_needs_tools(message):
     if any(kw in msg_lower for kw in search_keywords):
         return True
     
+    # Web browsing/navigation - detect URLs and "ir a" patterns
+    web_nav_keywords = [
+        'navega', 'navegar', 'navegá', 'navegador', 'navegación',
+        'abre la página', 'abre el sitio', 'abre la web', 'abre ese link',
+        've a esta', 've a ese', 've al sitio', 'vamos a',
+        'visit', 'visitar', 'ir a', 'entra a', 'entrar a',
+        'carga la página', 'carga el sitio', 'muestra la página',
+        'abrir', 'abre', 'open', 'opening',
+        'url', 'http', 'https', 'www.', '.com', '.org', '.net', '.io',
+        'página web', 'sitio web', 'site', 'website', 'web page',
+        'browser', 'browsing', 'navigate',
+    ]
+    if any(kw in msg_lower for kw in web_nav_keywords):
+        return True
+    # Also detect URLs in the message
+    if re.search(r'https?://[^\s]+|www\.[^\s]+', msg_lower):
+        return True
+    
     # Data/math/computation
     data_keywords = [
         # Spanish
@@ -1404,6 +1641,7 @@ def api_chat_stream():
     logger.info("Chat request (stream): model=%s, msg_len=%d, session=%s", model, len(user_message), current_chat_id)
 
     def generate():
+        nonlocal model
         full_response = ""
         prompt_tokens = 0
         eval_count = 0
@@ -1414,12 +1652,30 @@ def api_chat_stream():
             # Determine routing: base model for simple questions, advanced for code/tools
             route = 'base_first'
             route_reason = ''
+            # Detect web browsing requests - force cloud model (local models can't browse)
+            _needs_web = bool(re.search(r'https?://[^\s]+|www\.[^\s]+', user_message.lower())) or \
+                any(kw in user_message.lower() for kw in [
+                    'navega', 'navegar', 'navegá', 'abre la página', 'abre el sitio',
+                    'visit', 'visitar', 'ir a ', 'entra a ', 'url', 'página web',
+                ])
+            if _needs_web and not is_cloud_model(model):
+                # Try fallback model first (if set and cloud), then keep model but route advanced
+                if fallback_model and is_cloud_model(fallback_model):
+                    logger.info("Web browsing detected, using cloud fallback %s", fallback_model)
+                    _web_model = fallback_model
+                else:
+                    logger.info("Web browsing detected but no cloud model available, using %s (may fail)", model)
+                    _web_model = model
+                model = _web_model
             if force_basic:
                 route = 'base_first'
                 route_reason = 'forced'
             elif force_advanced:
                 route = 'advanced_direct'
                 route_reason = 'forced'
+            elif _needs_web:
+                route = 'advanced_direct'
+                route_reason = 'needs_web'
             elif _likely_needs_tools(user_message):
                 route = 'advanced_direct'
                 route_reason = 'needs_tools'
@@ -1432,6 +1688,53 @@ def api_chat_stream():
                 yield f"data: {json.dumps({'type': 'model_routing', 'route': route, 'base_model': base_model, 'advanced_model': model, 'reason': route_reason})}\n\n"
             else:
                 yield f"data: {json.dumps({'type': 'model_routing', 'route': route, 'model': model, 'reason': route_reason})}\n\n"
+
+            # Auto-execute web browsing for local models (they can't call tools reliably)
+            web_content = None
+            if _needs_web and (not is_cloud_model(model) or force_basic):
+                logger.info("Auto-executing web browsing for local model: %s", user_message[:100])
+                yield f"data: {json.dumps({'type': 'info', 'content': '🔍 Buscando en internet...'})}\n\n"
+                # Extract URL if present
+                url_match = re.search(r'https?://[^\s]+', user_message)
+                if not url_match:
+                    url_match = re.search(r'www\.[^\s]+', user_message)
+                if url_match:
+                    url = url_match.group(0)
+                    if not url.startswith('http'):
+                        url = 'https://' + url
+                    try:
+                        article = fetch_article(url)
+                        if article and article.get('content'):
+                            web_content = f"Contenido de {url}:\n\n{article['content'][:4000]}"
+                        elif article and article.get('error'):
+                            web_content = f"[No se pudo extraer contenido de {url}: {article['error']}]"
+                    except Exception as e:
+                        web_content = f"[Error al obtener {url}: {e}]"
+                else:
+                    # No URL, do a web search
+                    search_query = user_message
+                    # Clean up navigation commands
+                    for kw in ['navega', 'navegar', 'navegá', 'visit', 'visitar', 'ir a', 'entra a', 'abre', 'open', 'busca', 'buscar']:
+                        search_query = search_query.replace(kw, '').strip()
+                    if not search_query or len(search_query) < 3:
+                        search_query = user_message[-50:] if len(user_message) > 50 else user_message
+                    try:
+                        results = web_search(search_query)
+                        if results and isinstance(results, list) and 'error' not in results[0]:
+                            web_content = "Resultados de búsqueda:\n\n"
+                            for idx, r in enumerate(results[:5], 1):
+                                snippet = r.get('snippet', '')
+                                link = r.get('url', r.get('link', ''))
+                                web_content += f"{idx}. {r['title']}\n   URL: {link}\n   {snippet}\n\n"
+                        else:
+                            web_content = f"[Búsqueda sin resultados: {results[0].get('error', 'unknown') if results else 'no data'}]"
+                    except Exception as e:
+                        web_content = f"[Error al buscar: {e}]"
+                if web_content:
+                    logger.info("Web content obtained: %d chars", len(web_content))
+                else:
+                    logger.info("Web content could not be obtained")
+
             # Prepare messages for Ollama (strip timestamps for API)
             api_messages = []
             # Model-specific system prompts based on known behavior
@@ -1478,6 +1781,8 @@ def api_chat_stream():
                 system_content = 'You are a helpful assistant with access to tools. IMPORTANT RULES:\n- You MUST use tools to gather information when asked about files, system state, or to perform actions. Do NOT say you will do something - USE the tool to DO it.\n- When asked to CREATE or WRITE files, you MUST use the local_command tool with a shell command like: cat > /path/to/file << \'EOF\'\n  content here\n  EOF\n- When asked to EDIT or REPLACE text in a file, use sed -i: sed -i \'s/old_text/new_text/g\' /path/to/file\n- Do NOT just show code in your response - actually write it to disk using local_command\n- Do NOT say you cannot write files - you CAN write files using local_command\n- For creating files with content, use: cat > /path/to/file << \'EOF\' followed by the content, then EOF on a new line\n- Always use the actual home directory path like /home/cvc1/ instead of $HOME or ~\n- Available tools: local_command (execute system commands), web_search (search the internet), fetch_article (read web pages)\n- CRITICAL: When someone says things like "revisa", "lee", "muestra", "chequea", "ver", "check", "look", "see" you MUST immediately use the appropriate tool to DO IT. Do NOT say "let me check" without using the tool - USE THE TOOL RIGHT AWAY.\n- TOOL CALLING FORMAT: Use the native function calling format. Select the appropriate tool and provide the required parameters. Do NOT output XML or JSON as text.\n- Write operations will be executed automatically with user notification\n- IMPORTANT: When asked what model you are, you MUST identify yourself as the model name shown in the conversation. Your model name is: ' + model + '\n- IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If they write in English, respond in English. Match their language naturally.'
             if model_hint:
                 system_content += '\n\n' + model_hint
+            if web_content:
+                system_content += f'\n\n=== Información obtenida de internet ===\n{web_content}\n\nResponde al usuario basándote en esta información.'
             api_messages.append({
                 'role': 'system',
                 'content': system_content
@@ -1491,76 +1796,11 @@ def api_chat_stream():
             # Define tools for models that support them
             tools = []
             if local_model_supports_tools(base_model) or ':cloud' in model or '-cloud' in model:
-                tools = [
-                    {
-                        'type': 'function',
-                        'function': {
-                            'name': 'local_command',
-                            'description': 'Execute a validated local system command (read-only, no shell). Returns output as string. Examples: ls -la, cat file.txt, pwd, df -h, ps aux. For write operations, use the execute_write_command function (not this tool).',
-                            'parameters': {
-                                'type': 'object',
-                                'properties': {
-                                    'command': {
-                                        'type': 'string',
-                                        'description': 'The command to execute. Must be a single command with arguments. No shell metacharacters (|, ;, &&, $(), backticks). No sudo.',
-                                    }
-                                },
-                                'required': ['command'],
-                            },
-                        }
-                    },
-                    {
-                        'type': 'function',
-                        'function': {
-                            'name': 'execute_write_command',
-                            'description': 'Execute a write command (requires user permission). Returns output as string.',
-                            'parameters': {
-                                'type': 'object',
-                                'properties': {
-                                    'command': {
-                                        'type': 'string',
-                                        'description': 'The write command to execute. Examples: cat > file.txt, sed -i, echo "text" > file.txt.',
-                                    }
-                                },
-                                'required': ['command'],
-                            },
-                        }
-                    },
-                    {
-                        'type': 'function',
-                        'function': {
-                            'name': 'web_search',
-                            'description': 'Search the web for information. Returns search results.',
-                            'parameters': {
-                                'type': 'object',
-                                'properties': {
-                                    'query': {
-                                        'type': 'string',
-                                        'description': 'The search query.',
-                                    }
-                                },
-                                'required': ['query'],
-                            },
-                        }
-                    },
-                    {
-                        'type': 'function',
-                        'function': {
-                            'name': 'fetch_article',
-                            'description': 'Fetch and extract text content from a web page URL.',
-                            'parameters': {
-                                'type': 'object',
-                                'properties': {
-                                    'url': {
-                                        'type': 'string',
-                                        'description': 'The URL to fetch.',
-                                    }
-                                },
-                                'required': ['url'],
-                            },
-                        }
-                    },
-                ]
+                tools = build_tool_definitions(read_only=False, streaming=True)
+                # Web tools only needed if content wasn't successfully auto-injected
+                if web_content and not web_content.startswith('[No se pudo') and not web_content.startswith('[Error'):
+                    # Remove web_search and fetch_article from tools
+                    tools = [t for t in tools if t['function']['name'] not in ('web_search', 'fetch_article')]
                 
                 # For models with basic template (like gemma4), inject tools into system prompt
                 if not is_cloud_model(base_model):
@@ -1593,42 +1833,7 @@ def api_chat_stream():
                         })
                     
                     # Define read-only tools for base model
-                    base_tools = [
-                        {
-                            'type': 'function',
-                            'function': {
-                                'name': 'local_command',
-                                'description': 'Execute a validated local system command (read-only). Returns output as string. Examples: ls -la, cat file.txt, pwd, df -h, ps aux, grep pattern file, head -n file, tail -n file, find . -name pattern, du -sh directory.',
-                                'parameters': {
-                                    'type': 'object',
-                                    'properties': {
-                                        'command': {
-                                            'type': 'string',
-                                            'description': 'The command to execute. Must be a single command with arguments. No shell metacharacters (|, ;, &&, $(), backticks). No sudo. Examples: "ls -la", "cat file.txt", "df -h", "grep pattern file".'
-                                        }
-                                    },
-                                    'required': ['command']
-                                }
-                            }
-                        },
-                        {
-                            'type': 'function',
-                            'function': {
-                                'name': 'web_search',
-                                'description': 'Search the internet for information. Returns title, URL, and snippet for each result.',
-                                'parameters': {
-                                    'type': 'object',
-                                    'properties': {
-                                        'query': {
-                                            'type': 'string',
-                                            'description': 'The search query to find information on the internet.'
-                                        }
-                                    },
-                                    'required': ['query']
-                                }
-                            }
-                        }
-                    ]
+                    base_tools = build_tool_definitions(read_only=True, streaming=True)
                     
                     base_payload = {
                         'model': base_model,
@@ -1650,6 +1855,7 @@ def api_chat_stream():
                     base_is_thinking = False
                     with _urllib_base.urlopen(base_req) as base_response:
                         base_tool_calls_buffer = []
+                        base_content_buffer = ''
                         for base_line in base_response:
                             base_line = base_line.decode('utf-8').strip()
                             if not base_line:
@@ -1661,6 +1867,47 @@ def api_chat_stream():
                             if base_chunk.get('done'):
                                 base_prompt_tokens = base_chunk.get('prompt_eval_count', 0)
                                 base_eval_count = base_chunk.get('eval_count', 0)
+                                # Check for JSON tool calls (models like gemma4/north-mini-code output JSON as text)
+                                if not base_tool_calls_buffer and base_full_response:
+                                    _bf_stripped = base_full_response.strip()
+                                    _bf_cleaned = re.sub(r'</?arg_value>', '', _bf_stripped)
+                                    _bf_cleaned = re.sub(r'</?tool_call[^>]*>', '', _bf_cleaned).strip()
+                                    _bf_match = JSON_TOOL_PATTERN.search(_bf_cleaned)
+                                    if not _bf_match:
+                                        _bf_match = JSON_TOOL_PATTERN_SINGLE.search(_bf_cleaned)
+                                    if _bf_match:
+                                        _bf_tn = _bf_match.group(1)
+                                        _bf_ps = _bf_match.group(2)
+                                        try:
+                                            _bf_params = json.loads(_bf_ps)
+                                        except json.JSONDecodeError:
+                                            try:
+                                                _bf_params = json.loads(_bf_ps.replace("'", '"'))
+                                            except json.JSONDecodeError:
+                                                _bf_params = {}
+                                        logger.info("Base model: detected JSON tool call %s(%s)", _bf_tn, _bf_params)
+                                        base_full_response = JSON_TOOL_STRIP.sub('', base_full_response).strip()
+                                        base_tool_calls_buffer.append({'function': {'name': _bf_tn, 'arguments': _bf_params}})
+                                if base_content_buffer and not base_tool_calls_buffer:
+                                    _bc_stripped = base_content_buffer.strip()
+                                    _bc_cleaned = re.sub(r'</?arg_value>', '', _bc_stripped)
+                                    _bc_cleaned = re.sub(r'</?tool_call[^>]*>', '', _bc_cleaned).strip()
+                                    _bc_match = JSON_TOOL_PATTERN.search(_bc_cleaned)
+                                    if not _bc_match:
+                                        _bc_match = JSON_TOOL_PATTERN_SINGLE.search(_bc_cleaned)
+                                    if _bc_match:
+                                        _bc_tn = _bc_match.group(1)
+                                        _bc_ps = _bc_match.group(2)
+                                        try:
+                                            _bc_params = json.loads(_bc_ps)
+                                        except json.JSONDecodeError:
+                                            try:
+                                                _bc_params = json.loads(_bc_ps.replace("'", '"'))
+                                            except json.JSONDecodeError:
+                                                _bc_params = {}
+                                        logger.info("Base model: detected buffered JSON tool call %s(%s)", _bc_tn, _bc_params)
+                                        base_full_response = base_full_response.replace(base_content_buffer, '').strip()
+                                        base_tool_calls_buffer.append({'function': {'name': _bc_tn, 'arguments': _bc_params}})
                                 break
                             base_msg = base_chunk.get('message', {})
                             # Handle thinking tokens from models like deepseek
@@ -1680,10 +1927,39 @@ def api_chat_stream():
                                 continue
                             base_content = base_msg.get('content', '')
                             if base_content:
+                                # Check for JSON tool calls during streaming (same as advanced model path)
+                                _bs = base_content.strip()
+                                if not base_tool_calls_buffer:
+                                    if JSON_TOOL_PATTERN.search(_bs) or JSON_TOOL_PATTERN_SINGLE.search(_bs):
+                                        base_content_buffer += base_content
+                                        base_full_response += base_content
+                                        continue
+                                    if not base_content_buffer and _bs.startswith('{'):
+                                        base_content_buffer = base_content
+                                        base_full_response += base_content
+                                        continue
+                                    if base_content_buffer:
+                                        base_content_buffer += base_content
+                                        base_full_response += base_content
+                                        try:
+                                            _bp = json.loads(base_content_buffer.strip())
+                                            if isinstance(_bp, dict) and 'tool' in _bp:
+                                                continue
+                                        except json.JSONDecodeError:
+                                            if not base_content_buffer.strip().startswith('{'):
+                                                _bf = base_content_buffer
+                                                base_content_buffer = ''
+                                                base_full_response = base_full_response[:-len(_bf)] if base_full_response.endswith(_bf) else base_full_response
+                                                base_full_response += _bf
+                                                sse_data = json.dumps({'type': 'token', 'content': _bf, 'ts': round(time.time() - start_time, 2)})
+                                                yield f"data: {sse_data}\n\n"
+                                                continue
+                                            continue
                                 base_full_response += base_content
                                 sse_data = json.dumps({'type': 'token', 'content': base_content, 'ts': round(time.time() - start_time, 2)})
                                 yield f"data: {sse_data}\n\n"
 
+                    bypass_weak_check = False
                     # If native tool calls were returned, process them
                     if base_tool_calls_buffer:
                         logger.info("Base model returned %d native tool calls", len(base_tool_calls_buffer))
@@ -1695,116 +1971,81 @@ def api_chat_stream():
                                     tc_args = json.loads(tc_args)
                                 except json.JSONDecodeError:
                                     tc_args = {}
-                            tool_result = None
-                            tool_error = None
-                            if tc_name == 'local_command':
-                                command = tc_args.get('command', '')
-                                if is_write_command(command):
-                                    tool_error = "Write commands are not allowed in base model mode"
-                                else:
-                                    try:
-                                        tool_result = execute_local_command(command)
-                                    except Exception as e:
-                                        tool_error = str(e)
-                            elif tc_name == 'web_search':
-                                query = tc_args.get('query', '')
-                                try:
-                                    tool_result = web_search(query)
-                                except Exception as e:
-                                    tool_error = str(e)
-                            if tool_result is not None or tool_error is not None:
-                                result_msg = f"Tool '{tc_name}' result: "
-                                result_msg += str(tool_error) if tool_error else str(tool_result)
-                                followup_messages = base_api_messages + [
-                                    {'role': 'assistant', 'content': base_full_response or '', 'tool_calls': [tc]},
-                                    {'role': 'tool', 'content': result_msg}
-                                ]
-                                max_base_rounds = 8
-                                for base_round in range(max_base_rounds):
-                                    if base_round >= 2:
-                                        has_stop = any(
-                                            m.get('role') == 'system' and 'stop calling' in m.get('content', '').lower()
-                                            for m in followup_messages
-                                        )
-                                        if not has_stop:
-                                            followup_messages.append({
-                                                'role': 'system',
-                                                'content': 'IMPORTANT: You have gathered enough information. STOP calling tools. Now provide a comprehensive analysis and response to the user based on all the information you have collected. Do NOT make any more tool calls. Respond directly with your analysis.'
-                                            })
-                                    base_tools_this_round = base_tools if base_round < 2 else None
-                                    logger.info("Base follow-up round %d: sending tool result to %s", base_round + 1, base_model)
-                                    result_payload = {
-                                        'model': base_model,
-                                        'messages': followup_messages,
-                                        'stream': True,
-                                        'keep_alive': KEEP_ALIVE,
-                                        'tools': base_tools_this_round,
-                                    }
-                                    result_data_bytes = json.dumps(result_payload).encode('utf-8')
-                                    result_req = _urllib_base.Request(
-                                        f'{OLLAMA_BASE_URL}/api/chat',
-                                        data=result_data_bytes,
-                                        headers={'Content-Type': 'application/json'}
+                            result_msg = execute_single_tool(tc_name, tc_args, current_chat_id,
+                                                             write_permission='read_only')
+                            followup_messages = base_api_messages + [
+                                {'role': 'assistant', 'content': base_full_response or '', 'tool_calls': [tc]},
+                                {'role': 'tool', 'content': result_msg}
+                            ]
+                            max_base_rounds = 8
+                            for base_round in range(max_base_rounds):
+                                if base_round >= 2:
+                                    has_stop = any(
+                                        m.get('role') == 'system' and 'stop calling' in m.get('content', '').lower()
+                                        for m in followup_messages
                                     )
-                                    round_content = ''
-                                    round_tool_calls = []
-                                    with _urllib_base.urlopen(result_req, timeout=300) as result_response:
-                                        for result_line in result_response:
-                                            result_line = result_line.decode('utf-8').strip()
-                                            if not result_line:
-                                                continue
-                                            try:
-                                                result_chunk = json.loads(result_line)
-                                            except json.JSONDecodeError:
-                                                continue
-                                            if result_chunk.get('done'):
-                                                break
-                                            rc_msg = result_chunk.get('message', {})
-                                            result_content = rc_msg.get('content', '')
-                                            if result_content:
-                                                round_content += result_content
-                                                base_full_response += result_content
-                                                sse_data = json.dumps({'type': 'token', 'content': result_content, 'ts': round(time.time() - start_time, 2)})
-                                                yield f"data: {sse_data}\n\n"
-                                            if rc_msg.get('tool_calls'):
-                                                for rtc in rc_msg['tool_calls']:
-                                                    round_tool_calls.append(rtc)
-                                    logger.info("Base follow-up round %d: content_len=%d, tool_calls=%d", base_round + 1, len(round_content), len(round_tool_calls))
-                                    if not round_tool_calls:
-                                        break
-                                    followup_messages.append({'role': 'assistant', 'content': round_content or '', 'tool_calls': round_tool_calls})
-                                    for rtc in round_tool_calls:
-                                        rtc_name = rtc.get('function', {}).get('name', '')
-                                        rtc_args = rtc.get('function', {}).get('arguments', {})
-                                        if isinstance(rtc_args, str):
-                                            try:
-                                                rtc_args = json.loads(rtc_args)
-                                            except json.JSONDecodeError:
-                                                rtc_args = {}
-                                        rtc_result = None
-                                        rtc_error = None
-                                        if rtc_name == 'local_command':
-                                            cmd = rtc_args.get('command', '')
-                                            if is_write_command(cmd):
-                                                rtc_error = "Write commands not allowed in base mode"
-                                            else:
-                                                try:
-                                                    rtc_result = execute_local_command(cmd)
-                                                except Exception as e:
-                                                    rtc_error = str(e)
-                                        elif rtc_name == 'web_search':
-                                            query = rtc_args.get('query', '')
-                                            try:
-                                                rtc_result = web_search(query)
-                                            except Exception as e:
-                                                rtc_error = str(e)
-                                        tool_res_msg = f"Tool '{rtc_name}' result: "
-                                        tool_res_msg += str(rtc_error) if rtc_error else str(rtc_result)
-                                        followup_messages.append({'role': 'tool', 'content': tool_res_msg})
-                                base_model_succeeded = True
-                                used_model = base_model
-                                bypass_weak_check = True
-                                base_eval_count = len(base_full_response.split())
+                                    if not has_stop:
+                                        followup_messages.append({
+                                            'role': 'system',
+                                            'content': 'IMPORTANT: You have gathered enough information. STOP calling tools. Now provide a comprehensive analysis and response to the user based on all the information you have collected. Do NOT make any more tool calls. Respond directly with your analysis.'
+                                        })
+                                base_tools_this_round = base_tools if base_round < 2 else None
+                                logger.info("Base follow-up round %d: sending tool result to %s", base_round + 1, base_model)
+                                result_payload = {
+                                    'model': base_model,
+                                    'messages': followup_messages,
+                                    'stream': True,
+                                    'keep_alive': KEEP_ALIVE,
+                                    'tools': base_tools_this_round,
+                                }
+                                result_data_bytes = json.dumps(result_payload).encode('utf-8')
+                                result_req = _urllib_base.Request(
+                                    f'{OLLAMA_BASE_URL}/api/chat',
+                                    data=result_data_bytes,
+                                    headers={'Content-Type': 'application/json'}
+                                )
+                                round_content = ''
+                                round_tool_calls = []
+                                with _urllib_base.urlopen(result_req, timeout=300) as result_response:
+                                    for result_line in result_response:
+                                        result_line = result_line.decode('utf-8').strip()
+                                        if not result_line:
+                                            continue
+                                        try:
+                                            result_chunk = json.loads(result_line)
+                                        except json.JSONDecodeError:
+                                            continue
+                                        if result_chunk.get('done'):
+                                            break
+                                        rc_msg = result_chunk.get('message', {})
+                                        result_content = rc_msg.get('content', '')
+                                        if result_content:
+                                            round_content += result_content
+                                            base_full_response += result_content
+                                            sse_data = json.dumps({'type': 'token', 'content': result_content, 'ts': round(time.time() - start_time, 2)})
+                                            yield f"data: {sse_data}\n\n"
+                                        if rc_msg.get('tool_calls'):
+                                            for rtc in rc_msg['tool_calls']:
+                                                round_tool_calls.append(rtc)
+                                logger.info("Base follow-up round %d: content_len=%d, tool_calls=%d", base_round + 1, len(round_content), len(round_tool_calls))
+                                if not round_tool_calls:
+                                    break
+                                followup_messages.append({'role': 'assistant', 'content': round_content or '', 'tool_calls': round_tool_calls})
+                                for rtc in round_tool_calls:
+                                    rtc_name = rtc.get('function', {}).get('name', '')
+                                    rtc_args = rtc.get('function', {}).get('arguments', {})
+                                    if isinstance(rtc_args, str):
+                                        try:
+                                            rtc_args = json.loads(rtc_args)
+                                        except json.JSONDecodeError:
+                                            rtc_args = {}
+                                    tool_res_msg = execute_single_tool(rtc_name, rtc_args, current_chat_id,
+                                                                        write_permission='read_only')
+                                    followup_messages.append({'role': 'tool', 'content': tool_res_msg})
+                            base_model_succeeded = True
+                            used_model = base_model
+                            bypass_weak_check = True
+                            base_eval_count = len(base_full_response.split())
 
                     # Evaluate base model response quality
                     base_stripped = base_full_response.strip()
@@ -1834,80 +2075,55 @@ def api_chat_stream():
                         # Execute the tool
                         tool_name = tool_call_json.get('tool')
                         tool_args = tool_call_json.get('arguments', {})
-                        tool_result = None
-                        tool_error = None
-                        
-                        if tool_name == 'local_command':
-                                command = tool_args.get('command', '')
-                                if is_write_command(command):
-                                    tool_error = "Write commands are not allowed in base model mode"
-                                else:
-                                    try:
-                                        tool_result = execute_local_command(command)
-                                    except Exception as e:
-                                        tool_error = str(e)
-                        elif tool_name == 'web_search':
-                            query = tool_args.get('query', '')
-                            try:
-                                tool_result = web_search(query)
-                            except Exception as e:
-                                tool_error = str(e)
-                        
-                        # Send result back to model
-                        if tool_result is not None or tool_error is not None:
-                            result_msg = f"Tool '{tool_name}' result: "
-                            if tool_error:
-                                result_msg += f"ERROR: {tool_error}"
-                            else:
-                                result_msg += str(tool_result)
-                            
-                            # Continue the conversation with the tool result
-                            messages_with_result = base_api_messages + [
-                                {'role': 'assistant', 'content': base_stripped},
-                                {'role': 'system', 'content': result_msg}
-                            ]
-                            
-                            result_payload = {
-                                'model': base_model,
-                                'messages': messages_with_result,
-                                'stream': True,
-                                'keep_alive': KEEP_ALIVE,
-                                'tools': base_tools,
-                            }
-                            
-                            result_data_bytes = json.dumps(result_payload).encode('utf-8')
-                            result_req = _urllib_base.Request(
-                                f'{OLLAMA_BASE_URL}/api/chat',
-                                data=result_data_bytes,
-                                headers={'Content-Type': 'application/json'}
-                            )
-                            
-                            result_full_response = ""
-                            with _urllib_base.urlopen(result_req) as result_response:
-                                for result_line in result_response:
-                                    result_line = result_line.decode('utf-8').strip()
-                                    if not result_line:
-                                        continue
-                                    try:
-                                        result_chunk = json.loads(result_line)
-                                    except json.JSONDecodeError:
-                                        continue
-                                    if result_chunk.get('done'):
-                                        break
-                                    result_content = result_chunk.get('message', {}).get('content', '')
-                                    if result_content:
-                                        result_full_response += result_content
-                                        sse_data = json.dumps({'type': 'token', 'content': result_content, 'ts': round(time.time() - start_time, 2)})
-                                        yield f"data: {sse_data}\n\n"
-                            
-                            base_full_response += "\n" + result_full_response
-                            base_model_succeeded = True
-                            used_model = base_model
-                            base_eval_count = len(result_full_response.split())
-                            # Flag to bypass weak answer check when tool call succeeded
-                            bypass_weak_check = True
-                        else:
-                            bypass_weak_check = False
+                        result_msg = execute_single_tool(tool_name, tool_args, current_chat_id,
+                                                         write_permission='read_only')
+                        result_msg = f"Tool '{tool_name}' result: {result_msg}"
+
+                        # Continue the conversation with the tool result
+                        messages_with_result = base_api_messages + [
+                            {'role': 'assistant', 'content': base_stripped},
+                            {'role': 'system', 'content': result_msg}
+                        ]
+
+                        result_payload = {
+                            'model': base_model,
+                            'messages': messages_with_result,
+                            'stream': True,
+                            'keep_alive': KEEP_ALIVE,
+                            'tools': base_tools,
+                        }
+
+                        result_data_bytes = json.dumps(result_payload).encode('utf-8')
+                        result_req = _urllib_base.Request(
+                            f'{OLLAMA_BASE_URL}/api/chat',
+                            data=result_data_bytes,
+                            headers={'Content-Type': 'application/json'}
+                        )
+
+                        result_full_response = ""
+                        with _urllib_base.urlopen(result_req) as result_response:
+                            for result_line in result_response:
+                                result_line = result_line.decode('utf-8').strip()
+                                if not result_line:
+                                    continue
+                                try:
+                                    result_chunk = json.loads(result_line)
+                                except json.JSONDecodeError:
+                                    continue
+                                if result_chunk.get('done'):
+                                    break
+                                result_content = result_chunk.get('message', {}).get('content', '')
+                                if result_content:
+                                    result_full_response += result_content
+                                    sse_data = json.dumps({'type': 'token', 'content': result_content, 'ts': round(time.time() - start_time, 2)})
+                                    yield f"data: {sse_data}\n\n"
+
+                        base_full_response += "\n" + result_full_response
+                        base_model_succeeded = True
+                        used_model = base_model
+                        base_eval_count = len(result_full_response.split())
+                        # Flag to bypass weak answer check when tool call succeeded
+                        bypass_weak_check = True
 
                     # Check if response is a weak/ignorant answer that should escalate
                     weak_answer_patterns = [
@@ -1947,7 +2163,7 @@ def api_chat_stream():
                     is_greeting = any(kw in user_message.lower() for kw in ['hola', 'buenos días', 'buenas tardes', 'buenas noches', 'hey', 'saludos', 'qué tal', 'cómo estás', 'hello', 'hi'])
                     min_length = 3 if is_greeting else 10
                     
-                    if force_basic or (base_stripped and len(base_stripped) >= min_length and not looks_like_tool_attempt and not is_weak_answer):
+                    if force_basic or bypass_weak_check or (base_stripped and len(base_stripped) >= min_length and not looks_like_tool_attempt and not is_weak_answer):
                         # Base model succeeded - use its response
                         full_response = base_full_response
                         prompt_tokens = base_prompt_tokens
@@ -1980,6 +2196,8 @@ def api_chat_stream():
 
             # If base model succeeded, save and return early (skip advanced model flow)
             if base_model_succeeded:
+                # Fix any double-encoded characters from cloud model APIs
+                full_response = fix_double_encoding(full_response)
                 # Save session
                 session_data['messages'].append({
                     'role': 'assistant',
@@ -2134,7 +2352,8 @@ def api_chat_stream():
                                             _pending_permissions[perm_id] = {
                                                 'session_id': current_chat_id,
                                                 'command': cmd,
-                                                'q': queue.Queue()
+                                                'q': queue.Queue(),
+                                                'created_at': time.time()
                                             }
 
                             # Handle write command permissions:
@@ -2166,7 +2385,11 @@ def api_chat_stream():
                                     yield f"data: {json.dumps({'type': 'write_permission_required', 'command': item['cmd'], 'session_id': current_chat_id, 'perm_id': item['perm_id']})}\n\n"
                                     # Block until user responds via the /api/write-permission endpoint
                                     perm_queue = _pending_permissions[item['perm_id']]['q']
-                                    action = perm_queue.get()  # blocks until frontend responds
+                                    try:
+                                        action = perm_queue.get(timeout=120)  # 2 min timeout
+                                    except queue.Empty:
+                                        logger.warning("Write permission timeout for command: %s", item['cmd'])
+                                        action = 'deny'
                                     del _pending_permissions[item['perm_id']]
                                     if action == 'deny':
                                         merged_tool_calls[item['idx']]['_write_denied'] = True
@@ -2271,7 +2494,7 @@ def api_chat_stream():
                                             tr = execute_tool_call(d_tc, current_chat_id)
                                             followup_messages.append({'role': 'tool', 'content': tr, 'tool_call_id': f'fu_dsml_{uuid.uuid4().hex[:8]}'})
                                         continue
-                                    full_response = followup_content
+                                    full_response = fix_double_encoding(followup_content)
                                     # Check if the follow-up content is actually a JSON/DSML tool call
                                     _fu_stripped = followup_content.strip()
                                     # Clean XML tags
@@ -2312,7 +2535,7 @@ def api_chat_stream():
                                         # Let write commands execute - treat as normal tool calls
                                         logger.info("Model has partial content + write tool calls, allowing execution")
                                         # Send partial content first
-                                        full_response = followup_content
+                                        full_response = fix_double_encoding(followup_content)
                                         yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                                         # Now execute the write tool calls
                                         followup_messages.append({'role': 'assistant', 'content': followup_content, 'tool_calls': followup_tool_calls})
@@ -2365,11 +2588,11 @@ def api_chat_stream():
                                                 prompt_tokens = final_result.get('prompt_eval_count', prompt_tokens)
                                             else:
                                                 # Model returned empty, send partial content
-                                                full_response = followup_content
+                                                full_response = fix_double_encoding(followup_content)
                                                 yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                                         except Exception as e:
                                             logger.error("Forced final response failed: %s", e)
-                                            full_response = followup_content
+                                            full_response = fix_double_encoding(followup_content)
                                             yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                                         break
 
@@ -2448,10 +2671,15 @@ def api_chat_stream():
                                                     _pending_permissions[perm_id] = {
                                                         'session_id': current_chat_id,
                                                         'command': cmd,
-                                                        'q': q
+                                                        'q': q,
+                                                        'created_at': time.time()
                                                     }
                                                     yield f"data: {json.dumps({'type': 'write_permission_required', 'command': cmd, 'session_id': current_chat_id, 'perm_id': perm_id})}\n\n"
-                                                    action = q.get()  # blocks until frontend responds
+                                                    try:
+                                                        action = q.get(timeout=120)  # 2 min timeout
+                                                    except queue.Empty:
+                                                        logger.warning("Follow-up write permission timeout: %s", cmd)
+                                                        action = 'deny'
                                                     del _pending_permissions[perm_id]
                                                     if action == 'deny':
                                                         tr_content = "[Permission denied] Task cancelled"
@@ -2753,6 +2981,8 @@ def api_chat_stream():
                      'model': used_model
                  })
 
+        # Fix any double-encoded characters from cloud model APIs
+        full_response = fix_double_encoding(full_response)
         # Save session
         session_data['messages'].append({
             'role': 'assistant',
@@ -2794,50 +3024,25 @@ def api_chat_stream():
 
 def _process_tool_calls_streaming(model, session_data, tool_calls, current_content, prompt_tokens, current_chat_id=''):
     """Process tool calls from streaming - used internally"""
-    # This is called after streaming completes with tool calls
-    # For now, we execute tools and make a non-streaming follow-up
     tool_results = []
     for i, tool_call in enumerate(tool_calls):
         func_name = tool_call.get('function', {}).get('name', '')
         func_args = parse_tool_args(tool_call.get('function', {}).get('arguments', {}))
         tool_id = tool_call.get('id', f'tool_{i}')
 
-        logger.info("Stream tool call: %s(%s)", func_name, json.dumps(func_args))
-
-        if func_name == 'local_command':
-            cmd = func_args.get('command', '')
-            # Check if this was denied or approved by the permission system
-            if tool_call.get('_write_denied'):
-                result = "[Permission denied] Task cancelled"
-            elif is_write_command(cmd):
-                # Write command — execute it (permission was already auto-approved
-                # or granted by the user via the SSE permission flow)
-                logger.info("Executing write command: %s", cmd[:200])
-                result = execute_write_command(cmd, current_chat_id)
-                logger.info("Write command result: %s", str(result)[:200])
-            else:
-                result = execute_local_command(cmd)
-            tool_results.append({'role': 'tool', 'content': result, 'tool_call_id': tool_id})
-        elif func_name == 'web_search':
-            query = func_args.get('query', '')
-            results = web_search(query)
-            if results and isinstance(results, list) and 'error' in results[0]:
-                result = f"Search error: {results[0]['error']}"
-            else:
-                result = "Search results:\n\n"
-                for idx, r in enumerate(results[:5], 1):
-                    result += f"{idx}. {r['title']}\n   URL: {r['url']}\n   {r['snippet']}\n\n"
-            tool_results.append({'role': 'tool', 'content': result, 'tool_call_id': tool_id})
-        elif func_name == 'fetch_article':
-            url = func_args.get('url', '')
-            article = fetch_article(url)
-            if 'content' in article:
-                result = f"Article from {url}:\n\n{article['content']}"
-            else:
-                result = f"Could not fetch article from {url}: {article.get('error', 'Unknown error')}"
-            tool_results.append({'role': 'tool', 'content': result, 'tool_call_id': tool_id})
+        # Check write permission flags set upstream
+        if tool_call.get('_write_denied'):
+            write_perm = 'denied'
+        elif tool_call.get('_write_approved'):
+            write_perm = 'approved'
+        elif func_name in ('local_command', 'execute_write_command') and is_write_command(func_args.get('command', '')):
+            write_perm = 'approved'
         else:
-            tool_results.append({'role': 'tool', 'content': f"Unknown tool: {func_name}", 'tool_call_id': tool_id})
+            write_perm = 'approved'
+
+        result = execute_single_tool(func_name, func_args, current_chat_id,
+                                     write_permission=write_perm)
+        tool_results.append({'role': 'tool', 'content': result, 'tool_call_id': tool_id})
 
     return tool_results
 
@@ -2906,42 +3111,7 @@ def api_chat():
             })
         
         # Define read-only tools for base model
-        base_tools = [
-            {
-                'type': 'function',
-                'function': {
-                    'name': 'local_command',
-                    'description': 'Execute a validated local system command (read-only). Returns output as string. Examples: ls -la, cat file.txt, pwd, df -h, ps aux, grep pattern file, head -n file, tail -n file, find . -name pattern, du -sh directory.',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'command': {
-                                'type': 'string',
-                                'description': 'The command to execute. Must be a single command with arguments. No shell metacharacters (|, ;, &&, $(), backticks). No sudo. Examples: "ls -la", "cat file.txt", "df -h", "grep pattern file".'
-                            }
-                        },
-                        'required': ['command']
-                    }
-                }
-            },
-            {
-                'type': 'function',
-                'function': {
-                    'name': 'web_search',
-                    'description': 'Search the internet for information. Returns title, URL, and snippet for each result.',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'query': {
-                                'type': 'string',
-                                'description': 'The search query to find information on the internet.'
-                            }
-                        },
-                        'required': ['query']
-                    }
-                }
-            }
-        ]
+        base_tools = build_tool_definitions(read_only=True, streaming=True)
         
         base_payload = {
             'model': base_model,
@@ -2967,13 +3137,11 @@ def api_chat():
             used_model = base_model
             is_local = True
         except Exception as e:
-            logger.warning("Force basic model %s failed: %s, falling back to normal flow", base_model, e)
-            result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
-            response_text = result.get('response', '') if isinstance(result, dict) else result
-            prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
-            eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
-            used_model = result.get('used_model', model) if isinstance(result, dict) else model
-            is_local = (used_model == base_model)
+            logger.warning("Force basic model %s failed: %s", base_model, e)
+            response_text = f"[Error con modelo base {base_model}: {e}]"
+            prompt_tokens = 0
+            used_model = base_model
+            is_local = True
     elif force_advanced or _likely_needs_tools(user_message):
         # Use advanced model with tools directly
         reason = 'forced' if force_advanced else 'needs_tools'
@@ -3025,6 +3193,14 @@ def api_chat():
                 eval_count_val = base_result.get('eval_count', 0)
                 used_model = base_model
                 is_local = True
+            elif force_basic:
+                # force_basic: never escalate, use base response even if weak/short
+                logger.info("Base model weak/short with force_basic, keeping response (len=%d, weak=%s)", len(base_stripped), is_weak)
+                response_text = base_response if base_stripped else f"[Modelo base {base_model} no generó respuesta]"
+                prompt_tokens = base_result.get('prompt_eval_count', 0)
+                eval_count_val = base_result.get('eval_count', 0)
+                used_model = base_model
+                is_local = True
             else:
                 # Escalate to advanced model
                 logger.info("Base model insufficient (len=%d, weak=%s), escalating to %s", len(base_stripped), is_weak, model)
@@ -3035,13 +3211,20 @@ def api_chat():
                 used_model = model
                 is_local = False
         except Exception as e:
-            logger.warning("Base model %s failed: %s, falling back to advanced", base_model, e)
-            result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
-            response_text = result.get('response', '') if isinstance(result, dict) else result
-            prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
-            eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
-            used_model = model
-            is_local = False
+            if force_basic:
+                logger.warning("Base model %s failed with force_basic: %s", base_model, e)
+                response_text = f"[Error con modelo base {base_model}: {e}]"
+                prompt_tokens = 0
+                used_model = base_model
+                is_local = True
+            else:
+                logger.warning("Base model %s failed: %s, falling back to advanced", base_model, e)
+                result = process_ollama_response(model, session_data['messages'], OLLAMA_TOOLS)
+                response_text = result.get('response', '') if isinstance(result, dict) else result
+                prompt_tokens = result.get('prompt_eval_count', 0) if isinstance(result, dict) else 0
+                eval_count_val = result.get('eval_count', 0) if isinstance(result, dict) else 0
+                used_model = model
+                is_local = False
 
     # Fallback model — smart: don't try cloud fallback if connectivity failed
     if (response_text.startswith('Error:') or response_text.startswith('[ERROR]')) and fallback_model and fallback_model != model:
