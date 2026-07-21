@@ -1021,6 +1021,10 @@ def build_tool_definitions(*, read_only=False, streaming=True):
     return tools
 
 
+# --- Ollama Tools Definition ---
+OLLAMA_TOOLS = build_tool_definitions(read_only=False, streaming=False)
+
+
 def execute_single_tool(tc_name, tc_args, session_id='', write_permission='ask', is_followup=False):
     """
     Execute a single tool call and return result string.
