@@ -20,7 +20,7 @@ from flask import Flask, Response, render_template, request, jsonify, session
 SESSIONS_DIR = os.environ.get('SESSIONS_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sessions'))
 DEBUG = os.environ.get('FLASK_DEBUG', 'false').lower() in ('true', '1', 'yes')
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
-KEEP_ALIVE = os.environ.get('OLLAMA_KEEP_ALIVE', '5m')
+KEEP_ALIVE = os.environ.get('OLLAMA_KEEP_ALIVE', '30m')
 BASE_CHAT_MODEL = "llama3.2:latest"
 
 APP_VERSION = "1.8.0"
@@ -1619,6 +1619,41 @@ def _likely_needs_tools(message):
     return False
 
 
+STREAM_CHUNK_TIMEOUT = 120  # Max seconds to wait for next chunk before aborting
+MAX_THINKING_SECONDS = 90  # Max seconds for thinking mode before aborting
+
+
+def _set_stream_timeout(response, timeout):
+    """Set read timeout on an HTTP response's underlying socket."""
+    try:
+        if hasattr(response, '_sock') and response._sock:
+            response._sock.settimeout(timeout)
+        elif hasattr(response, 'fp') and hasattr(response.fp, '_sock') and response.fp._sock:
+            response.fp._sock.settimeout(timeout)
+    except Exception:
+        pass
+
+
+def _iter_stream_with_timeout(response):
+    """Iterate streaming response lines with per-chunk timeout.
+
+    Yields raw lines from the response.
+    Raises TimeoutError if no data arrives for STREAM_CHUNK_TIMEOUT seconds.
+    """
+    import socket
+    _set_stream_timeout(response, STREAM_CHUNK_TIMEOUT)
+
+    while True:
+        try:
+            line = response.readline()
+        except (socket.timeout, OSError) as e:
+            logger.warning("Stream read timeout: %s", e)
+            raise TimeoutError(f"Stream timeout: no data for {STREAM_CHUNK_TIMEOUT}s")
+        if not line:
+            break  # Stream closed
+        yield line
+
+
 @app.route('/api/chat/stream', methods=['POST'])
 def api_chat_stream():
     """Streaming chat endpoint using SSE"""
@@ -1896,10 +1931,12 @@ def api_chat_stream():
                     base_full_response = ""
                     base_prompt_tokens = 0
                     base_is_thinking = False
-                    with _urllib_base.urlopen(base_req) as base_response:
+                    base_thinking_start = 0
+                    with _urllib_base.urlopen(base_req, timeout=STREAM_CHUNK_TIMEOUT) as base_response:
                         base_tool_calls_buffer = []
                         base_content_buffer = ''
-                        for base_line in base_response:
+                        base_thinking_start = 0
+                        for base_line in _iter_stream_with_timeout(base_response):
                             base_line = base_line.decode('utf-8').strip()
                             if not base_line:
                                 continue
@@ -1963,7 +2000,14 @@ def api_chat_stream():
                             if base_thinking and not base_msg.get('content'):
                                 if not base_is_thinking:
                                     base_is_thinking = True
+                                    base_thinking_start = time.time()
                                     yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
+                                # Abort thinking if it exceeds max time
+                                if time.time() - base_thinking_start > MAX_THINKING_SECONDS:
+                                    logger.warning("Base model thinking exceeded %ds, aborting", MAX_THINKING_SECONDS)
+                                    yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
+                                    base_is_thinking = False
+                                    break
                                 continue
                             elif base_is_thinking and base_msg.get('content'):
                                 base_is_thinking = False
@@ -2085,8 +2129,8 @@ def api_chat_stream():
                                 round_content = ''
                                 round_tool_calls = []
                                 try:
-                                    with _urllib_base.urlopen(result_req, timeout=300) as result_response:
-                                        for result_line in result_response:
+                                    with _urllib_base.urlopen(result_req, timeout=STREAM_CHUNK_TIMEOUT) as result_response:
+                                        for result_line in _iter_stream_with_timeout(result_response):
                                             result_line = result_line.decode('utf-8').strip()
                                             if not result_line:
                                                 continue
@@ -2251,8 +2295,8 @@ def api_chat_stream():
                         )
 
                         result_full_response = ""
-                        with _urllib_base.urlopen(result_req) as result_response:
-                            for result_line in result_response:
+                        with _urllib_base.urlopen(result_req, timeout=STREAM_CHUNK_TIMEOUT) as result_response:
+                            for result_line in _iter_stream_with_timeout(result_response):
                                 result_line = result_line.decode('utf-8').strip()
                                 if not result_line:
                                     continue
@@ -2413,13 +2457,14 @@ def api_chat_stream():
             )
 
             logger.info("Sending request to Ollama model=%s at %s", model, datetime.now().isoformat())
-            with urllib.request.urlopen(req, timeout=600) as response:
+            with urllib.request.urlopen(req, timeout=STREAM_CHUNK_TIMEOUT) as response:
                 tool_calls_buffer = []
                 current_tool_call = None
                 content_buffer = ''
                 is_thinking = False
+                thinking_start = 0
 
-                for line in response:
+                for line in _iter_stream_with_timeout(response):
                     line = line.decode('utf-8').strip()
                     if not line:
                         continue
@@ -2937,7 +2982,14 @@ def api_chat_stream():
                     if thinking_content and not msg.get('content') and not msg.get('tool_calls'):
                         if not is_thinking:
                             is_thinking = True
+                            thinking_start = time.time()
                             yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
+                        # Abort thinking if it exceeds max time
+                        if time.time() - thinking_start > MAX_THINKING_SECONDS:
+                            logger.warning("Model thinking exceeded %ds, aborting", MAX_THINKING_SECONDS)
+                            yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
+                            is_thinking = False
+                            break
                         continue
                     elif is_thinking and (msg.get('content') or msg.get('tool_calls')):
                         is_thinking = False
@@ -3055,8 +3107,8 @@ def api_chat_stream():
                                 data=data_bytes,
                                 headers={'Content-Type': 'application/json'}
                             )
-                            with urllib.request.urlopen(req2, timeout=600) as response2:
-                                for line in response2:
+                            with urllib.request.urlopen(req2, timeout=STREAM_CHUNK_TIMEOUT) as response2:
+                                for line in _iter_stream_with_timeout(response2):
                                     line = line.decode('utf-8').strip()
                                     if not line:
                                         continue
@@ -3074,6 +3126,14 @@ def api_chat_stream():
                                         full_response += content
                                         sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
                                         yield f"data: {sse_data}\n\n"
+
+        except TimeoutError as e:
+            logger.error("Stream timeout (model hung): %s", e)
+            error_msg = f"⏱️ **Tiempo de espera agotado**\n\nEl modelo `{model}` no respondió en {STREAM_CHUNK_TIMEOUT}s.\n\n**Posibles causas:**\n- El modelo está sobrecargado o colgado\n- Contexto demasiado largo para el modelo\n\n**Soluciones:**\n- Intenta con un modelo más rápido\n- Reduce el tamaño de la conversación\n- Recarga la página"
+            yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+            elapsed = round(time.time() - start_time, 2)
+            yield f"data: {json.dumps({'type': 'done', 'context_usage': 0, 'elapsed': elapsed, 'used_model': model, 'is_local': not is_cloud_model(model)})}\n\n"
+            return
 
         except Exception as e:
             logger.error("Streaming error: %s", e)
@@ -3107,8 +3167,8 @@ def api_chat_stream():
                             headers={'Content-Type': 'application/json'}
                         )
                         fb_full = ''
-                        with urllib.request.urlopen(fb_req, timeout=600) as fb_resp:
-                            for fb_line in fb_resp:
+                        with urllib.request.urlopen(fb_req, timeout=STREAM_CHUNK_TIMEOUT) as fb_resp:
+                            for fb_line in _iter_stream_with_timeout(fb_resp):
                                 fb_line = fb_line.decode('utf-8').strip()
                                 if not fb_line: continue
                                 try:
