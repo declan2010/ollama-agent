@@ -25,8 +25,11 @@ BASE_CHAT_MODEL = "llama3.2:latest"
 
 APP_VERSION = "1.8.0"
 
-# Models known to support tool calling (local models that actually use tools)
-LOCAL_MODELS_WITH_TOOLS = [
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+TOOL_MODELS_FILE = os.path.join(APP_DIR, 'tool_models.json')
+
+# Seed list — models confirmed to support tool calling (auto-managed, file overrides)
+_TOOL_MODELS_SEED = [
     'qwen3.5', 'qwen3', 'qwen2.5', 'qwen2',
     'gemma4', 'gemma3', 'gemma2',
     'llama3.2', 'llama3.1', 'llama3',
@@ -35,11 +38,59 @@ LOCAL_MODELS_WITH_TOOLS = [
     'bonsai',
 ]
 
+_tool_models_lock = threading.Lock()
+
+def _load_tool_models():
+    """Load tool model list from JSON file, falling back to seed."""
+    try:
+        with open(TOOL_MODELS_FILE, 'r') as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return list(_TOOL_MODELS_SEED)
+
+def _save_tool_models(models):
+    """Save tool model list to JSON file."""
+    try:
+        with open(TOOL_MODELS_FILE, 'w') as f:
+            json.dump(models, f, indent=2)
+    except Exception as e:
+        logger.warning("Could not save tool_models.json: %s", e)
+
+# In-memory cache, loaded once at startup
+_tool_models_cache = _load_tool_models()
+
 def local_model_supports_tools(model_name):
     """Check if a local model is known to support tool calling."""
     model_lower = model_name.lower()
-    for supported in LOCAL_MODELS_WITH_TOOLS:
-        if supported in model_lower:
+    for supported in _tool_models_cache:
+        if supported.lower() in model_lower:
+            return True
+    return False
+
+def add_tool_model(model_name):
+    """Add a model to the tool-support list (persisted to file)."""
+    model_lower = model_name.lower()
+    with _tool_models_lock:
+        for existing in _tool_models_cache:
+            if existing.lower() == model_lower:
+                return False  # Already in list
+        _tool_models_cache.append(model_name)
+        _save_tool_models(_tool_models_cache)
+        logger.info("Auto-added %s to tool_models.json", model_name)
+        return True
+
+def remove_tool_model(model_name):
+    """Remove a model from the tool-support list (persisted to file)."""
+    model_lower = model_name.lower()
+    with _tool_models_lock:
+        before = len(_tool_models_cache)
+        _tool_models_cache[:] = [m for m in _tool_models_cache if m.lower() != model_lower]
+        if len(_tool_models_cache) < before:
+            _save_tool_models(_tool_models_cache)
+            logger.info("Removed %s from tool_models.json", model_name)
             return True
     return False
 
@@ -2055,6 +2106,7 @@ def api_chat_stream():
                     # If native tool calls were returned, process them
                     if base_tool_calls_buffer:
                         logger.info("Base model returned %d native tool calls", len(base_tool_calls_buffer))
+                        add_tool_model(base_model)
                         for tc in base_tool_calls_buffer:
                             tc_name = tc.get('function', {}).get('name', '')
                             tc_args = tc.get('function', {}).get('arguments', {})
@@ -2547,6 +2599,9 @@ def api_chat_stream():
                             merged_tool_calls = merge_tool_calls(tool_calls_buffer)
                             logger.info("Merged %d raw tool call chunks into %d complete tool calls",
                                         len(tool_calls_buffer), len(merged_tool_calls))
+                            # Auto-add model to tool support list
+                            if not is_cloud_model(model):
+                                add_tool_model(model)
 
                             # Pre-process write commands: check permissions
                             write_cmds_to_request = []
@@ -3137,6 +3192,13 @@ def api_chat_stream():
 
         except Exception as e:
             logger.error("Streaming error: %s", e)
+
+            # Auto-remove from tool models if model rejects tools (400 Bad Request)
+            err_str = str(e)
+            if '400' in err_str and not is_cloud_model(model):
+                removed = remove_tool_model(model)
+                if removed:
+                    logger.info("Auto-removed %s from tool list (400 error)", model)
 
             # Smart error handling: detect connectivity issues
             conn_error = is_connectivity_error(e)
