@@ -1670,8 +1670,21 @@ def _likely_needs_tools(message):
     return False
 
 
-STREAM_CHUNK_TIMEOUT = 120  # Max seconds to wait for next chunk before aborting
+STREAM_CHUNK_TIMEOUT = 120  # Max seconds to wait for each chunk
+STREAM_INITIAL_TIMEOUT = 300  # Max seconds to wait for the first chunk (model loading time)
 MAX_THINKING_SECONDS = 90  # Max seconds for thinking mode before aborting
+
+
+def _is_model_loaded(model_name):
+    """Check if a model is currently loaded in Ollama memory."""
+    try:
+        import urllib.request as _urllib_ps
+        ps_resp = _urllib_ps.urlopen(f'{OLLAMA_BASE_URL}/api/ps', timeout=5)
+        ps_data = json.loads(ps_resp.read().decode('utf-8'))
+        loaded_names = [m.get('name', '') for m in ps_data.get('models', [])]
+        return any(model_name == m or model_name + ':latest' == m for m in loaded_names)
+    except Exception:
+        return False
 
 
 def _set_stream_timeout(response, timeout):
@@ -1685,23 +1698,31 @@ def _set_stream_timeout(response, timeout):
         pass
 
 
-def _iter_stream_with_timeout(response):
+def _iter_stream_with_timeout(response, initial=False):
     """Iterate streaming response lines with per-chunk timeout.
 
+    Uses STREAM_INITIAL_TIMEOUT for the first chunk when initial=True,
+    then STREAM_CHUNK_TIMEOUT for subsequent chunks.
     Yields raw lines from the response.
-    Raises TimeoutError if no data arrives for STREAM_CHUNK_TIMEOUT seconds.
+    Raises TimeoutError if no data arrives within the timeout.
     """
     import socket
-    _set_stream_timeout(response, STREAM_CHUNK_TIMEOUT)
+    chunk_timeout = STREAM_INITIAL_TIMEOUT if initial else STREAM_CHUNK_TIMEOUT
+    _set_stream_timeout(response, chunk_timeout)
 
     while True:
         try:
             line = response.readline()
         except (socket.timeout, OSError) as e:
-            logger.warning("Stream read timeout: %s", e)
-            raise TimeoutError(f"Stream timeout: no data for {STREAM_CHUNK_TIMEOUT}s")
+            timeout_used = chunk_timeout
+            logger.warning("Stream read timeout after %ds: %s", timeout_used, e)
+            raise TimeoutError(f"Stream timeout: no data for {timeout_used}s")
         if not line:
             break  # Stream closed
+        # After first chunk received, tighten timeout for subsequent chunks
+        if chunk_timeout != STREAM_CHUNK_TIMEOUT:
+            chunk_timeout = STREAM_CHUNK_TIMEOUT
+            _set_stream_timeout(response, chunk_timeout)
         yield line
 
 
@@ -1988,11 +2009,13 @@ def api_chat_stream():
                     base_prompt_tokens = 0
                     base_is_thinking = False
                     base_thinking_start = 0
-                    with _urllib_base.urlopen(base_req, timeout=STREAM_CHUNK_TIMEOUT) as base_response:
+                    with _urllib_base.urlopen(base_req, timeout=STREAM_INITIAL_TIMEOUT) as base_response:
                         base_tool_calls_buffer = []
                         base_content_buffer = ''
                         base_thinking_start = 0
-                        for base_line in _iter_stream_with_timeout(base_response):
+                        is_first_base_chunk = True
+                        for base_line in _iter_stream_with_timeout(base_response, initial=is_first_base_chunk):
+                            is_first_base_chunk = False
                             base_line = base_line.decode('utf-8').strip()
                             if not base_line:
                                 continue
@@ -2514,14 +2537,14 @@ def api_chat_stream():
             )
 
             logger.info("Sending request to Ollama model=%s at %s", model, datetime.now().isoformat())
-            with urllib.request.urlopen(req, timeout=STREAM_CHUNK_TIMEOUT) as response:
+            with urllib.request.urlopen(req, timeout=STREAM_INITIAL_TIMEOUT) as response:
                 tool_calls_buffer = []
                 current_tool_call = None
                 content_buffer = ''
                 is_thinking = False
                 thinking_start = 0
 
-                for line in _iter_stream_with_timeout(response):
+                for line in _iter_stream_with_timeout(response, initial=True):
                     line = line.decode('utf-8').strip()
                     if not line:
                         continue
@@ -3192,7 +3215,7 @@ def api_chat_stream():
             # Auto-remove from tool models if this was a tool-enabled request
             if not is_cloud_model(model):
                 remove_tool_model(model)
-            error_msg = f"⏱️ **Tiempo de espera agotado**\n\nEl modelo `{model}` no respondió en {STREAM_CHUNK_TIMEOUT}s.\n\n**Posibles causas:**\n- El modelo está sobrecargado o colgado\n- Contexto demasiado largo para el modelo\n\n**Soluciones:**\n- Intenta con un modelo más rápido\n- Reduce el tamaño de la conversación\n- Recarga la página"
+            error_msg = f"⏱️ **Tiempo de espera agotado**\n\nEl modelo `{model}` no respondió.\n\n**Posibles causas:**\n- El modelo es muy grande y tarda en cargar\n- El modelo está sobrecargado o colgado\n- Contexto demasiado largo para el modelo\n\n**Soluciones:**\n- Intenta de nuevo (puede tardar hasta 5 min en cargar la primera vez)\n- Intenta con un modelo más rápido\n- Reduce el tamaño de la conversación\n- Recarga la página"
             yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
             elapsed = round(time.time() - start_time, 2)
             yield f"data: {json.dumps({'type': 'done', 'context_usage': 0, 'elapsed': elapsed, 'used_model': model, 'is_local': not is_cloud_model(model)})}\n\n"
