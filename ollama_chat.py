@@ -1717,7 +1717,7 @@ def api_chat_stream():
     force_basic = data.get('force_basic', False)
     logger.info("STREAM REQUEST force_basic=%s (raw=%s, type=%s) force_advanced=%s (raw=%s)", force_basic, repr(data.get('force_basic')), type(data.get('force_basic')).__name__, force_advanced, repr(data.get('force_advanced')))
     if not base_model:
-        base_model = BASE_CHAT_MODEL
+        base_model = model if not force_basic else BASE_CHAT_MODEL
 
     # Validate base_model exists, fall back to default if not
     try:
@@ -1930,8 +1930,8 @@ def api_chat_stream():
                     # Remove web_search and fetch_article from tools
                     tools = [t for t in tools if t['function']['name'] not in ('web_search', 'fetch_article')]
                 
-                # For models with basic template (like gemma4), inject tools into system prompt
-                if not is_cloud_model(base_model):
+                # For models with basic template (like gemma4) that DON'T support native tools, inject tools into system prompt
+                if not is_cloud_model(base_model) and not local_model_supports_tools(base_model):
                     tools_json = json.dumps(tools, indent=2)
                     system_content += f"\n\nYou have access to the following tools. When you need to use a tool, respond with a JSON object in this EXACT format:\n{{'tool': 'tool_name', 'arguments': {{...}}}}\n\nAvailable tools:\n{tools_json}\n\nIMPORTANT: If the user asks you to execute a command or get information that requires a tool, you MUST use the tool by responding with the JSON format above. Do NOT say you cannot do it."
                     # Update the system message with injected tools
@@ -1954,7 +1954,12 @@ def api_chat_stream():
                     import urllib.request as _urllib_base
                     
                     # Use full tools (read/write) — permission system blocks writes until user approves
-                    base_api_messages = [{'role': 'system', 'content': 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in. You have access to local_command, web_search, and fetch_article tools. Use them proactively to fulfill requests. For file creation/modification, use local_command with shell commands (e.g. cat > file). Write operations will ask for your permission before executing.'}]
+                    base_has_tools = not is_simple and local_model_supports_tools(base_model)
+                    if base_has_tools:
+                        base_sys_content = 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in. You have access to local_command, web_search, and fetch_article tools. Use them proactively to fulfill requests. For file creation/modification, use local_command with shell commands (e.g. cat > file). Write operations will ask for your permission before executing.'
+                    else:
+                        base_sys_content = 'You are a helpful assistant. Always respond in the same language the user writes in.'
+                    base_api_messages = [{'role': 'system', 'content': base_sys_content}]
                     for msg in session_data['messages']:
                         base_api_messages.append({
                             'role': msg['role'],
@@ -1962,7 +1967,7 @@ def api_chat_stream():
                         })
                     
                     # Define full tools for base model (write tools included, permission popup handles safety)
-                    base_tools = build_tool_definitions(read_only=False, streaming=True)
+                    base_tools = build_tool_definitions(read_only=False, streaming=True) if base_has_tools else []
                     
                     base_payload = {
                         'model': base_model,
@@ -2494,7 +2499,7 @@ def api_chat_stream():
                 'messages': api_messages,
                 'stream': True,
                 'keep_alive': KEEP_ALIVE,
-                'tools': [] if is_simple else OLLAMA_TOOLS,
+                'tools': [] if is_simple else (OLLAMA_TOOLS if local_model_supports_tools(model) else []),
             }
 
             logger.info("Advanced model payload: model=%s, is_simple=%s, tools_count=%d", model, is_simple, len(payload.get('tools', [])))
@@ -3184,6 +3189,9 @@ def api_chat_stream():
 
         except TimeoutError as e:
             logger.error("Stream timeout (model hung): %s", e)
+            # Auto-remove from tool models if this was a tool-enabled request
+            if not is_cloud_model(model):
+                remove_tool_model(model)
             error_msg = f"⏱️ **Tiempo de espera agotado**\n\nEl modelo `{model}` no respondió en {STREAM_CHUNK_TIMEOUT}s.\n\n**Posibles causas:**\n- El modelo está sobrecargado o colgado\n- Contexto demasiado largo para el modelo\n\n**Soluciones:**\n- Intenta con un modelo más rápido\n- Reduce el tamaño de la conversación\n- Recarga la página"
             yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
             elapsed = round(time.time() - start_time, 2)
