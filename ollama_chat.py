@@ -3,11 +3,13 @@ Ollama-Agent - Web Agent for local Ollama models
 Allows chatting with local models, selecting models, and saving sessions.
 """
 
+import glob
 import json
 import logging
 import os
 import queue
 import re
+import threading
 import time
 import uuid
 from collections import defaultdict
@@ -30,6 +32,7 @@ LOCAL_MODELS_WITH_TOOLS = [
     'llama3.2', 'llama3.1', 'llama3',
     'nemotron', 'dolphin',
     'north-mini-code',
+    'bonsai',
 ]
 
 def local_model_supports_tools(model_name):
@@ -71,6 +74,17 @@ logger = logging.getLogger('ollama-agent')
 app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.secret_key = os.environ.get('SECRET_KEY', 'ollama-webchat-secret-key-change-me')
+
+# --- Thread safety for permission state ---
+_permissions_lock = threading.Lock()
+
+# --- CORS support ---
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
+    return response
 
 # --- Rate Limiting ---
 RATE_LIMIT_WINDOW = 60  # seconds
@@ -477,7 +491,6 @@ def execute_write_command(cmd, session_id):
         # Special handling: intercept xdg-open of HTML files in compound commands
         # Split by && or ; to find xdg-open commands
         xdg_open_html = None
-        import re
         parts = re.split(r'[;&]', cmd)
         for part in parts:
             part = part.strip()
@@ -562,10 +575,12 @@ def api_write_permission():
     logger.info("Write permission response: perm_id=%s, action=%s, session=%s", perm_id, action, session_id)
 
     # Signal the specific pending permission
-    if perm_id and perm_id in _pending_permissions:
-        pending = _pending_permissions[perm_id]
-        pending['q'].put(action)
-        return jsonify({'success': True})
+    if perm_id:
+        with _permissions_lock:
+            pending = _pending_permissions.get(perm_id)
+        if pending:
+            pending['q'].put(action)
+            return jsonify({'success': True})
 
     # Fallback: signal session-level queue (old behavior)
     if session_id:
@@ -800,10 +815,9 @@ def process_ollama_response(model, messages, tools=None):
 
             if func_name == 'local_command':
                 cmd = func_args.get('command', '')
-                # Execute write commands too (auto-approved in non-streaming fallback)
                 if is_write_command(cmd):
-                    logger.info("Non-streaming: executing write command: %s", cmd[:200])
-                    result = execute_write_command(cmd, 'non-streaming')
+                    logger.warning("Non-streaming: denying write command (no permission popup available): %s", cmd[:200])
+                    result = "[Permission denied] Write commands are not available in non-streaming mode. Please use the streaming chat interface for file operations."
                 else:
                     result = execute_local_command(cmd)
                 tool_results.append({
@@ -866,7 +880,6 @@ DSML_PATTERN = re.compile(r'<\w+[：:｜|]\s*invoke\s+name="(\w+)"[^>]*>.*?<\w+[
 DSML_PATTERN2 = re.compile(r'<(\w+)[：:｜|]\s*invoke\s+name="(\w+)"[^>]*>\s*<\1[：:｜|]\s*parameter\s+name="(\w+)"\s+string="(true|false)"\s*>([^<]*)', re.DOTALL)
 DSML_PATTERN_SIMPLE = re.compile(r'<(\w+)[：:｜|](?:invoke|Invoke)\s+name="(\w+)"[^>]*>')
 DSML_STRIP = re.compile(r'<\w+[：:｜|]\s*\w+(?:\s+[^>]*)?>[^<]*(?:<\w+[：:｜|]\s*\w+(?:\s+[^>]*)?>)?')
-JSON_TOOL_STRIP = re.compile(r'\{\s*"tool"\s*:\s*"[^"]*"\s*,\s*"(?:parameters|arguments)"\s*:\s*\{.*?\}\s*\}')
 def strip_tool_tags(text):
     """Strip DSML and JSON tool call tags from text."""
     t = DSML_STRIP.sub('', text)
@@ -1102,23 +1115,49 @@ def execute_tool_call(tc, current_chat_id=''):
 
 
 # --- Cleanup stale state ---
+def secure_path(path, allowed_prefixes=None):
+    """Resolve and validate a file path, preventing directory traversal.
+    Returns the normalized absolute path if valid, or None if rejected."""
+    if not path:
+        return None
+    resolved = os.path.normpath(os.path.abspath(path))
+    if allowed_prefixes:
+        for prefix in allowed_prefixes:
+            if resolved.startswith(os.path.normpath(os.path.abspath(prefix))):
+                return resolved
+        return None
+    return resolved
+
+
 def cleanup_stale_state():
     """Periodic cleanup of stale permission requests and rate limit entries."""
     now = time.time()
     stale_cutoff = now - 600  # 10 minutes
     # Clean stale pending permissions
-    stale_ids = [
-        perm_id for perm_id, pending in list(_pending_permissions.items())
-        if pending.get('created_at', 0) < stale_cutoff
-    ]
-    for perm_id in stale_ids:
-        logger.info("Cleaning stale permission request: %s", perm_id)
-        try:
-            pending = _pending_permissions.pop(perm_id, None)
-            if pending and not pending['q'].empty():
-                pending['q'].get_nowait()
-        except Exception:
-            pass
+    with _permissions_lock:
+        stale_ids = [
+            perm_id for perm_id, pending in list(_pending_permissions.items())
+            if pending.get('created_at', 0) < stale_cutoff
+        ]
+        for perm_id in stale_ids:
+            logger.info("Cleaning stale permission request: %s", perm_id)
+            try:
+                pending = _pending_permissions.pop(perm_id, None)
+                if pending and not pending['q'].empty():
+                    pending['q'].get_nowait()
+            except Exception:
+                pass
+    # Clean session write permissions for sessions that no longer exist
+    existing_sessions = set()
+    sessions_dir = SESSIONS_DIR
+    try:
+        for f in glob.glob(os.path.join(sessions_dir, '*.json')):
+            existing_sessions.add(os.path.splitext(os.path.basename(f))[0])
+    except Exception:
+        pass
+    stale_sessions = [sid for sid in list(_session_write_permissions.keys()) if sid not in existing_sessions]
+    for sid in stale_sessions:
+        _session_write_permissions.pop(sid, None)
     # Clean empty rate limit entries
     empty_ips = [ip for ip, timestamps in list(_rate_limits.items()) if not timestamps]
     for ip in empty_ips:
@@ -1127,7 +1166,6 @@ def cleanup_stale_state():
 
 # Schedule periodic cleanup
 try:
-    import threading
     def _cleanup_loop():
         while True:
             time.sleep(300)  # every 5 minutes
@@ -1814,7 +1852,8 @@ def api_chat_stream():
                     api_messages[0]['content'] = system_content
 
             # If user asks to analyze files, force tool use (not saved to session)
-            _force_keywords = ['analiza', 'revisa', 'explora', 'examina', 'inspecciona',
+            _force_keywords = ['analiza', 'analizar', 'revisa', 'revisar', 'explora', 'explorar',
+                               'examina', 'examinar', 'inspecciona', 'inspeccionar',
                                'analyze', 'review', 'explore', 'examine', 'inspect',
                                'dime que opinas', 'que opinas', 'analisis', 'analysis']
             if any(kw in user_message.lower() for kw in _force_keywords):
@@ -1828,16 +1867,16 @@ def api_chat_stream():
                 try:
                     import urllib.request as _urllib_base
                     
-                    # Simple query - use base model with read-only tools available
-                    base_api_messages = [{'role': 'system', 'content': 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in. You have access to read-only tools: local_command (for reading files, listing directories, system info) and web_search (for searching information). When you need to use a tool, respond with JSON format: {"tool": "tool_name", "arguments": {...}}. Do NOT use write commands or modify files.'}]
+                    # Use full tools (read/write) — permission system blocks writes until user approves
+                    base_api_messages = [{'role': 'system', 'content': 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in. You have access to local_command, web_search, and fetch_article tools. Use them proactively to fulfill requests. For file creation/modification, use local_command with shell commands (e.g. cat > file). Write operations will ask for your permission before executing.'}]
                     for msg in session_data['messages']:
                         base_api_messages.append({
                             'role': msg['role'],
                             'content': msg['content']
                         })
                     
-                    # Define read-only tools for base model
-                    base_tools = build_tool_definitions(read_only=True, streaming=True)
+                    # Define full tools for base model (write tools included, permission popup handles safety)
+                    base_tools = build_tool_definitions(read_only=False, streaming=True)
                     
                     base_payload = {
                         'model': base_model,
@@ -1871,6 +1910,11 @@ def api_chat_stream():
                             if base_chunk.get('done'):
                                 base_prompt_tokens = base_chunk.get('prompt_eval_count', 0)
                                 base_eval_count = base_chunk.get('eval_count', 0)
+                                # Collect native tool calls from the done chunk (some models send tool_calls + done together)
+                                base_done_msg = base_chunk.get('message', {})
+                                if base_done_msg.get('tool_calls'):
+                                    for tc in base_done_msg['tool_calls']:
+                                        base_tool_calls_buffer.append(tc)
                                 # Check for JSON tool calls (models like gemma4/north-mini-code output JSON as text)
                                 if not base_tool_calls_buffer and base_full_response:
                                     _bf_stripped = base_full_response.strip()
@@ -1975,15 +2019,45 @@ def api_chat_stream():
                                     tc_args = json.loads(tc_args)
                                 except json.JSONDecodeError:
                                     tc_args = {}
+                            # Determine write permission for this tool call
+                            base_write_perm = 'approved'
+                            if tc_name == 'local_command':
+                                cmd = tc_args.get('command', '')
+                                if is_write_command(cmd):
+                                    bp_perm = check_write_permission(cmd, current_chat_id)
+                                    if bp_perm == 'ask':
+                                        bp_perm_id = str(uuid.uuid4())
+                                        with _permissions_lock:
+                                            _pending_permissions[bp_perm_id] = {
+                                                'session_id': current_chat_id,
+                                                'command': cmd,
+                                                'q': queue.Queue(),
+                                                'created_at': time.time()
+                                            }
+                                        yield f"data: {json.dumps({'type': 'write_permission_required', 'command': cmd, 'session_id': current_chat_id, 'perm_id': bp_perm_id})}\n\n"
+                                        try:
+                                            bp_action = _pending_permissions[bp_perm_id]['q'].get(timeout=120)
+                                        except queue.Empty:
+                                            bp_action = 'deny'
+                                        with _permissions_lock:
+                                            _pending_permissions.pop(bp_perm_id, None)
+                                        if bp_action in ('once', 'session'):
+                                            _session_write_permissions[current_chat_id] = bp_action
+                                            base_write_perm = 'approved'
+                                        else:
+                                            base_write_perm = 'denied'
+                                    else:
+                                        base_write_perm = 'approved'
                             result_msg = execute_single_tool(tc_name, tc_args, current_chat_id,
-                                                             write_permission='read_only')
+                                                             write_permission=base_write_perm)
                             followup_messages = base_api_messages + [
                                 {'role': 'assistant', 'content': base_full_response or '', 'tool_calls': [tc]},
                                 {'role': 'tool', 'content': result_msg}
                             ]
-                            max_base_rounds = 8
+                            max_base_rounds = 3
+                            base_no_content_rounds = 0
                             for base_round in range(max_base_rounds):
-                                if base_round >= 2:
+                                if base_round >= 1:
                                     has_stop = any(
                                         m.get('role') == 'system' and 'stop calling' in m.get('content', '').lower()
                                         for m in followup_messages
@@ -1993,7 +2067,7 @@ def api_chat_stream():
                                             'role': 'system',
                                             'content': 'IMPORTANT: You have gathered enough information. STOP calling tools. Now provide a comprehensive analysis and response to the user based on all the information you have collected. Do NOT make any more tool calls. Respond directly with your analysis.'
                                         })
-                                base_tools_this_round = base_tools if base_round < 2 else None
+                                base_tools_this_round = base_tools if base_round < 1 else None
                                 logger.info("Base follow-up round %d: sending tool result to %s", base_round + 1, base_model)
                                 result_payload = {
                                     'model': base_model,
@@ -2010,42 +2084,85 @@ def api_chat_stream():
                                 )
                                 round_content = ''
                                 round_tool_calls = []
-                                with _urllib_base.urlopen(result_req, timeout=300) as result_response:
-                                    for result_line in result_response:
-                                        result_line = result_line.decode('utf-8').strip()
-                                        if not result_line:
-                                            continue
-                                        try:
-                                            result_chunk = json.loads(result_line)
-                                        except json.JSONDecodeError:
-                                            continue
-                                        if result_chunk.get('done'):
-                                            break
-                                        rc_msg = result_chunk.get('message', {})
-                                        result_content = rc_msg.get('content', '')
-                                        if result_content:
-                                            round_content += result_content
-                                            base_full_response += result_content
-                                            sse_data = json.dumps({'type': 'token', 'content': result_content, 'ts': round(time.time() - start_time, 2)})
-                                            yield f"data: {sse_data}\n\n"
-                                        if rc_msg.get('tool_calls'):
-                                            for rtc in rc_msg['tool_calls']:
-                                                round_tool_calls.append(rtc)
-                                logger.info("Base follow-up round %d: content_len=%d, tool_calls=%d", base_round + 1, len(round_content), len(round_tool_calls))
-                                if not round_tool_calls:
-                                    break
-                                followup_messages.append({'role': 'assistant', 'content': round_content or '', 'tool_calls': round_tool_calls})
-                                for rtc in round_tool_calls:
-                                    rtc_name = rtc.get('function', {}).get('name', '')
-                                    rtc_args = rtc.get('function', {}).get('arguments', {})
-                                    if isinstance(rtc_args, str):
-                                        try:
-                                            rtc_args = json.loads(rtc_args)
-                                        except json.JSONDecodeError:
-                                            rtc_args = {}
-                                    tool_res_msg = execute_single_tool(rtc_name, rtc_args, current_chat_id,
-                                                                        write_permission='read_only')
-                                    followup_messages.append({'role': 'tool', 'content': tool_res_msg})
+                                try:
+                                    with _urllib_base.urlopen(result_req, timeout=300) as result_response:
+                                        for result_line in result_response:
+                                            result_line = result_line.decode('utf-8').strip()
+                                            if not result_line:
+                                                continue
+                                            try:
+                                                result_chunk = json.loads(result_line)
+                                            except json.JSONDecodeError:
+                                                continue
+                                            if result_chunk.get('done'):
+                                                done_rc_msg = result_chunk.get('message', {})
+                                                if done_rc_msg.get('tool_calls'):
+                                                    for rtc in done_rc_msg['tool_calls']:
+                                                        round_tool_calls.append(rtc)
+                                                break
+                                            rc_msg = result_chunk.get('message', {})
+                                            result_content = rc_msg.get('content', '')
+                                            if result_content:
+                                                round_content += result_content
+                                                base_full_response += result_content
+                                                sse_data = json.dumps({'type': 'token', 'content': result_content, 'ts': round(time.time() - start_time, 2)})
+                                                yield f"data: {sse_data}\n\n"
+                                            if rc_msg.get('tool_calls'):
+                                                for rtc in rc_msg['tool_calls']:
+                                                    round_tool_calls.append(rtc)
+                                    logger.info("Base follow-up round %d: content_len=%d, tool_calls=%d", base_round + 1, len(round_content), len(round_tool_calls))
+                                    if not round_tool_calls:
+                                        break
+                                    if not round_content:
+                                        base_no_content_rounds += 1
+                                    if base_no_content_rounds >= 2:
+                                        logger.info("Model stuck in tool-only loop after %d rounds, forcing finalize", base_round + 1)
+                                        base_full_response += "\n\n[Analysis complete based on tool results above]"
+                                        break
+                                    followup_messages.append({'role': 'assistant', 'content': round_content or '', 'tool_calls': round_tool_calls})
+                                    for rtc in round_tool_calls:
+                                        rtc_name = rtc.get('function', {}).get('name', '')
+                                        rtc_args = rtc.get('function', {}).get('arguments', {})
+                                        if isinstance(rtc_args, str):
+                                            try:
+                                                rtc_args = json.loads(rtc_args)
+                                            except json.JSONDecodeError:
+                                                rtc_args = {}
+                                        rtc_perm = 'approved'
+                                        if rtc_name == 'local_command':
+                                            rtc_cmd = rtc_args.get('command', '')
+                                            if is_write_command(rtc_cmd):
+                                                rtc_ck = check_write_permission(rtc_cmd, current_chat_id)
+                                                if rtc_ck == 'ask':
+                                                    rtc_pid = str(uuid.uuid4())
+                                                    with _permissions_lock:
+                                                        _pending_permissions[rtc_pid] = {
+                                                            'session_id': current_chat_id,
+                                                            'command': rtc_cmd,
+                                                            'q': queue.Queue(),
+                                                            'created_at': time.time()
+                                                        }
+                                                    yield f"data: {json.dumps({'type': 'write_permission_required', 'command': rtc_cmd, 'session_id': current_chat_id, 'perm_id': rtc_pid})}\n\n"
+                                                    try:
+                                                        rtc_act = _pending_permissions[rtc_pid]['q'].get(timeout=120)
+                                                    except queue.Empty:
+                                                        rtc_act = 'deny'
+                                                    with _permissions_lock:
+                                                        _pending_permissions.pop(rtc_pid, None)
+                                                    if rtc_act in ('once', 'session'):
+                                                        _session_write_permissions[current_chat_id] = rtc_act
+                                                        rtc_perm = 'approved'
+                                                    else:
+                                                        rtc_perm = 'denied'
+                                                else:
+                                                    rtc_perm = 'approved'
+                                        tool_res_msg = execute_single_tool(rtc_name, rtc_args, current_chat_id,
+                                                                            write_permission=rtc_perm)
+                                        followup_messages.append({'role': 'tool', 'content': tool_res_msg})
+                                except Exception as followup_err:
+                                        logger.warning("Base follow-up round %d failed: %s", base_round + 1, followup_err)
+                                        base_full_response += f"\n[Error in follow-up: {followup_err}]"
+                                        break
                             base_model_succeeded = True
                             used_model = base_model
                             bypass_weak_check = True
@@ -2079,8 +2196,37 @@ def api_chat_stream():
                         # Execute the tool
                         tool_name = tool_call_json.get('tool')
                         tool_args = tool_call_json.get('arguments', {})
+                        # Check write permission for JSON tool calls
+                        json_perm = 'approved'
+                        if tool_name == 'local_command':
+                            json_cmd = tool_args.get('command', '')
+                            if is_write_command(json_cmd):
+                                json_ck = check_write_permission(json_cmd, current_chat_id)
+                                if json_ck == 'ask':
+                                    json_pid = str(uuid.uuid4())
+                                    with _permissions_lock:
+                                        _pending_permissions[json_pid] = {
+                                            'session_id': current_chat_id,
+                                            'command': json_cmd,
+                                            'q': queue.Queue(),
+                                            'created_at': time.time()
+                                        }
+                                    yield f"data: {json.dumps({'type': 'write_permission_required', 'command': json_cmd, 'session_id': current_chat_id, 'perm_id': json_pid})}\n\n"
+                                    try:
+                                        json_act = _pending_permissions[json_pid]['q'].get(timeout=120)
+                                    except queue.Empty:
+                                        json_act = 'deny'
+                                    with _permissions_lock:
+                                        _pending_permissions.pop(json_pid, None)
+                                    if json_act in ('once', 'session'):
+                                        _session_write_permissions[current_chat_id] = json_act
+                                        json_perm = 'approved'
+                                    else:
+                                        json_perm = 'denied'
+                                else:
+                                    json_perm = 'approved'
                         result_msg = execute_single_tool(tool_name, tool_args, current_chat_id,
-                                                         write_permission='read_only')
+                                                         write_permission=json_perm)
                         result_msg = f"Tool '{tool_name}' result: {result_msg}"
 
                         # Continue the conversation with the tool result
@@ -2115,6 +2261,10 @@ def api_chat_stream():
                                 except json.JSONDecodeError:
                                     continue
                                 if result_chunk.get('done'):
+                                    done_rc = result_chunk.get('message', {})
+                                    if done_rc.get('tool_calls'):
+                                        for rtc in done_rc['tool_calls']:
+                                            result_full_response += f"\n[Tool call: {rtc.get('function', {}).get('name', '')}]"
                                     break
                                 result_content = result_chunk.get('message', {}).get('content', '')
                                 if result_content:
@@ -2283,6 +2433,11 @@ def api_chat_stream():
                                     len(full_response), len(tool_calls_buffer), is_thinking, is_thinking)
                         # Capture eval counts
                         prompt_tokens = chunk.get('prompt_eval_count', 0)
+                        # Collect native tool calls from the done chunk (some models send tool_calls + done together)
+                        done_msg = chunk.get('message', {})
+                        if done_msg.get('tool_calls'):
+                            for tc in done_msg['tool_calls']:
+                                tool_calls_buffer.append(tc)
                         eval_count = chunk.get('eval_count', 0)
 
                         # Check full response for JSON tool calls (models like gemma4 output JSON as text)
@@ -2361,12 +2516,13 @@ def api_chat_stream():
                                             # Assign unique permission ID
                                             perm_id = str(uuid.uuid4())
                                             write_cmds_to_request.append({'idx': i_t, 'cmd': cmd, 'perm_id': perm_id})
-                                            _pending_permissions[perm_id] = {
-                                                'session_id': current_chat_id,
-                                                'command': cmd,
-                                                'q': queue.Queue(),
-                                                'created_at': time.time()
-                                            }
+                                            with _permissions_lock:
+                                                _pending_permissions[perm_id] = {
+                                                    'session_id': current_chat_id,
+                                                    'command': cmd,
+                                                    'q': queue.Queue(),
+                                                    'created_at': time.time()
+                                                }
 
                             # Handle write command permissions:
                             # - First write in session: ask user (yield permission popup, block until answered)
@@ -2396,13 +2552,16 @@ def api_chat_stream():
                                     logger.info("Asking user permission for write command: %s", item['cmd'])
                                     yield f"data: {json.dumps({'type': 'write_permission_required', 'command': item['cmd'], 'session_id': current_chat_id, 'perm_id': item['perm_id']})}\n\n"
                                     # Block until user responds via the /api/write-permission endpoint
-                                    perm_queue = _pending_permissions[item['perm_id']]['q']
+                                    with _permissions_lock:
+                                        perm_entry = _pending_permissions.get(item['perm_id'])
+                                        perm_queue = perm_entry['q'] if perm_entry else queue.Queue()
                                     try:
                                         action = perm_queue.get(timeout=120)  # 2 min timeout
                                     except queue.Empty:
                                         logger.warning("Write permission timeout for command: %s", item['cmd'])
                                         action = 'deny'
-                                    del _pending_permissions[item['perm_id']]
+                                    with _permissions_lock:
+                                        _pending_permissions.pop(item['perm_id'], None)
                                     if action == 'deny':
                                         merged_tool_calls[item['idx']]['_write_denied'] = True
                                     elif action == 'session':
@@ -2680,19 +2839,21 @@ def api_chat_stream():
                                                     logger.info("Follow-up write needs permission: %s", cmd)
                                                     perm_id = str(uuid.uuid4())
                                                     q = queue.Queue()
-                                                    _pending_permissions[perm_id] = {
-                                                        'session_id': current_chat_id,
-                                                        'command': cmd,
-                                                        'q': q,
-                                                        'created_at': time.time()
-                                                    }
+                                                    with _permissions_lock:
+                                                        _pending_permissions[perm_id] = {
+                                                            'session_id': current_chat_id,
+                                                            'command': cmd,
+                                                            'q': q,
+                                                            'created_at': time.time()
+                                                        }
                                                     yield f"data: {json.dumps({'type': 'write_permission_required', 'command': cmd, 'session_id': current_chat_id, 'perm_id': perm_id})}\n\n"
                                                     try:
                                                         action = q.get(timeout=120)  # 2 min timeout
                                                     except queue.Empty:
                                                         logger.warning("Follow-up write permission timeout: %s", cmd)
                                                         action = 'deny'
-                                                    del _pending_permissions[perm_id]
+                                                    with _permissions_lock:
+                                                        _pending_permissions.pop(perm_id, None)
                                                     if action == 'deny':
                                                         tr_content = "[Permission denied] Task cancelled"
                                                     elif action == 'session':
@@ -2975,7 +3136,8 @@ def api_chat_stream():
                     yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
             else:
                 # Generic error
-                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+                err_msg = str(e)[:500].replace('<', '&lt;').replace('>', '&gt;')
+                yield f"data: {json.dumps({'type': 'error', 'content': err_msg})}\n\n"
 
             # Always send done event so frontend doesn't hang
             elapsed = round(time.time() - start_time, 2)
@@ -3388,25 +3550,12 @@ def api_session_save():
     return jsonify({'error': 'Session not found'})
 
 
-@app.route('/api/preview/<preview_id>', methods=['GET'])
-def api_preview(preview_id):
-    """Serve an HTML file in a sandboxed iframe (no JS, no parent access).
-    Supports ?path=/full/path/to/file.html to serve any HTML file."""
-    html_path = request.args.get('path', '')
-    
-    # If no path param, look for preview_id.html in the previews dir
-    if not html_path:
-        preview_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'previews')
-        html_path = os.path.join(preview_dir, f'{preview_id}.html')
-    
-    if not os.path.exists(html_path):
-        return 'File not found', 404
-    
+def _serve_sandboxed_html(html_path):
+    """Read an HTML file and return it sandboxed in an iframe srcdoc.
+    Returns (response_string, status_code)."""
     try:
         with open(html_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        
-        # Escape content for srcdoc attribute
         escaped = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
         sandboxed = f'''<!DOCTYPE html>
 <html><head>
@@ -3420,35 +3569,55 @@ def api_preview(preview_id):
 </body></html>'''
         return sandboxed
     except Exception as e:
-        return f'Error: {e}', 500
+        logger.error("Preview error reading %s: %s", html_path, e)
+        return 'Error reading file', 500
+
+
+ALLOWED_PREVIEW_DIRS = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'previews'),
+    '/tmp/',
+    os.path.expanduser('~'),
+]
+
+
+@app.route('/api/preview/<preview_id>', methods=['GET'])
+def api_preview(preview_id):
+    """Serve an HTML file in a sandboxed iframe."""
+    html_path = request.args.get('path', '')
+    
+    if html_path:
+        safe = secure_path(html_path, ALLOWED_PREVIEW_DIRS)
+        if not safe or not os.path.isfile(safe):
+            return 'File not found or access denied', 404
+        if not safe.lower().endswith(('.html', '.htm')):
+            return 'Only HTML files can be previewed', 400
+        if is_sensitive_path(safe):
+            return 'Access denied', 403
+        return _serve_sandboxed_html(safe)
+    
+    preview_dir = ALLOWED_PREVIEW_DIRS[0]
+    html_path = os.path.join(preview_dir, f'{preview_id}.html')
+    safe = secure_path(html_path)
+    if not safe or not os.path.isfile(safe):
+        return 'File not found', 404
+    return _serve_sandboxed_html(safe)
 
 
 @app.route('/api/preview/serve', methods=['GET'])
 def api_preview_serve():
-    """Serve an HTML file from any path as sandboxed iframe content."""
+    """Serve an HTML file from an allowed path as sandboxed iframe content."""
     html_path = request.args.get('path', '')
+    if not html_path:
+        return 'Path parameter required', 400
     
-    if not html_path or not os.path.exists(html_path):
-        return 'File not found', 404
-    
-    try:
-        with open(html_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        escaped = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
-        sandboxed = f'''<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8">
-<style>
-  body {{ margin: 0; padding: 10px; background: #1a1a2e; min-height: 100vh; box-sizing: border-box; }}
-  iframe {{ width: 100%; height: 600px; border: 1px solid #333; border-radius: 8px; background: #fff; }}
-</style>
-</head><body>
-<iframe srcdoc="{escaped}" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe>
-</body></html>'''
-        return sandboxed
-    except Exception as e:
-        return f'Error: {e}', 500
+    safe = secure_path(html_path, ALLOWED_PREVIEW_DIRS)
+    if not safe or not os.path.isfile(safe):
+        return 'File not found or access denied', 404
+    if not safe.lower().endswith(('.html', '.htm')):
+        return 'Only HTML files can be previewed', 400
+    if is_sensitive_path(safe):
+        return 'Access denied', 403
+    return _serve_sandboxed_html(safe)
 
 
 @app.route('/api/save-code', methods=['POST'])
@@ -3462,8 +3631,12 @@ def api_save_code():
     if not filepath or not content:
         return jsonify({'error': 'Filepath and content required'})
 
-    if '..' in filepath or filepath.startswith('/etc') or filepath.startswith('/usr'):
-        return jsonify({'error': 'Invalid filepath'})
+    safe_path = secure_path(filepath, ALLOWED_PREVIEW_DIRS)
+    if not safe_path:
+        return jsonify({'error': 'Invalid or disallowed filepath'})
+    if is_sensitive_path(safe_path):
+        return jsonify({'error': 'Cannot write to sensitive system path'})
+    filepath = safe_path
 
     try:
         perm = check_write_permission(f'write {filepath}', session_id)
@@ -3483,10 +3656,13 @@ def api_save_code():
 @app.route('/api/session/new', methods=['POST'])
 def api_session_new():
     """API to create a new session"""
-    session['chat_id'] = str(uuid.uuid4())[:8]
+    new_id = str(uuid.uuid4())[:8]
+    old_id = session.get('chat_id', '')
 
-    # Reset write permission for new session
-    _session_write_permissions.pop(session.get('chat_id', ''), None)
+    # Reset write permission for the OLD session before changing to new one
+    if old_id:
+        _session_write_permissions.pop(old_id, None)
+    session['chat_id'] = new_id
 
     session_data = {
         'model': session.get('model', 'llama3'),
