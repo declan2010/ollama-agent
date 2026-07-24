@@ -36,6 +36,7 @@ _TOOL_MODELS_SEED = [
     'nemotron', 'dolphin',
     'north-mini-code',
     'bonsai',
+    'laguna-xs',
 ]
 
 _tool_models_lock = threading.Lock()
@@ -1894,6 +1895,7 @@ def api_chat_stream():
                 'kimi': 'Use the available tools for file operations and web searches. Do not just show code.',
                 'qwen': 'Always use local_command tool for writing files. Use cat > with heredoc syntax.',
                 'deepseek': 'Use the available tools for file operations and web searches. Do not just show code. Always use local_command tool to write/edit files.',
+                'laguna': 'IMPORTANT: Do NOT output your internal reasoning or thought process. Do NOT say things like "Okay, the user said..." or "I need to respond..." or "Let me think...". Respond directly and naturally to the user. Always respond in the same language the user writes in.',
             }
             model_hint = ''
             for key, hint in MODEL_HINTS.items():
@@ -2097,6 +2099,16 @@ def api_chat_stream():
                                     base_tool_calls_buffer.append(tc)
                                 continue
                             base_content = base_msg.get('content', '')
+                            # Filter out thinking/reasoning content that some models emit as text (e.g., laguna-xs)
+                            # This catches content that looks like internal reasoning: "Okay, the user said..."
+                            if base_content and not base_is_thinking:
+                                _bs_lower = base_content.strip().lower()
+                                if (_bs_lower.startswith('okay,') or _bs_lower.startswith('ok,') or
+                                    _bs_lower.startswith('the user') or _bs_lower.startswith('user said') or
+                                    _bs_lower.startswith('i need to') or _bs_lower.startswith('let me') or
+                                    _bs_lower.startswith('thinking') or _bs_lower.startswith('reasoning')):
+                                    logger.debug("Filtering thinking-like content from base model: %s", base_content[:100])
+                                    continue
                             if base_content:
                                 # Check for JSON tool calls during streaming (same as advanced model path)
                                 _bs = base_content.strip()
@@ -3096,6 +3108,19 @@ def api_chat_stream():
                             if re.match(r'^[\w.-]+:tool_call', stripped):
                                 full_response += ''
                                 continue
+                            # Filter out laguna thinking/internal monologue (e.g., "Okay, the user said...", "I need to...")
+                            if 'laguna' in model.lower():
+                                thinking_patterns = [
+                                    r'^Okay,?\s+(the user|user said|they said)',
+                                    r'^I need to (respond|think|consider)',
+                                    r'^Let me (think|consider|respond)',
+                                    r'^The user (said|wrote|asked)',
+                                    r'^(Hmm|Well|Alright),?\s+(the|I|user)',
+                                    r'^I (should|will|need to|want to)',
+                                ]
+                                if any(re.search(p, stripped, re.IGNORECASE) for p in thinking_patterns):
+                                    full_response += ''
+                                    continue
                             # Check if content contains a JSON tool call (gemma4 outputs JSON as text)
                             if JSON_TOOL_PATTERN.search(stripped) or JSON_TOOL_PATTERN_SINGLE.search(stripped):
                                 content_buffer += content

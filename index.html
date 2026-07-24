@@ -463,7 +463,6 @@
             border-radius: 8px;
             overflow-x: auto;
             overflow-y: auto;
-            max-height: 400px;
             margin: 15px 0;
             font-family: 'Courier New', monospace;
             font-size: 0.85rem;
@@ -1015,7 +1014,7 @@
             </div>
             <div style="padding: 15px 0;">
                 <p style="color: var(--text-primary); margin-bottom: 8px;">The assistant wants to run:</p>
-                <pre id="writePermissionCommand" style="background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; overflow-y: auto; max-height: 200px; font-family: 'Courier New', monospace; font-size: 0.9rem; color: var(--accent); margin-bottom: 20px; word-break: break-all; white-space: pre-wrap;"></pre>
+                <pre id="writePermissionCommand" style="background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; overflow-y: auto; max-height: 400px; font-family: 'Courier New', monospace; font-size: 0.9rem; color: var(--accent); margin-bottom: 20px; word-break: break-all; white-space: pre-wrap;"></pre>
                 <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 20px;">This command will modify files or system state.</p>
                 <div style="display: flex; flex-direction: column; gap: 10px;">
                     <button onclick="handleWritePermission('session')" style="background: #22c55e; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: bold;">
@@ -1108,37 +1107,59 @@
                     pre.style.position = 'relative';
                     pre.appendChild(btn);
 
-                    // Add collapse toggle for long code blocks
-                    // Use a small delay to ensure scrollHeight is accurate
+                    // Add collapse toggle for very long code blocks (> 1200px ~60 lines)
                     setTimeout(() => {
                         const height = pre.scrollHeight;
-                        if (height > 250) {
+                        if (height > 1200) {
                             const toggle = document.createElement('button');
                             toggle.className = 'copy-btn';
-                            toggle.textContent = '▽ Show more';
+                            toggle.textContent = 'Mostrar todo el código ▽';
                             toggle.style.right = '70px';
-                            toggle.style.fontSize = '0.75rem';
-                            toggle.style.opacity = '0.9';
+                            toggle.style.fontSize = '0.8rem';
+                            toggle.style.fontWeight = '600';
+                            toggle.style.opacity = '1';
                             toggle.style.background = 'var(--accent)';
                             toggle.style.color = '#fff';
+                            toggle.style.padding = '6px 14px';
+                            toggle.style.borderRadius = '6px';
+                            toggle.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+                            toggle.style.zIndex = '10';
                             toggle.onclick = () => {
                                 if (pre.dataset.expanded === 'true') {
-                                    pre.style.maxHeight = '200px';
+                                    pre.style.maxHeight = '800px';
                                     pre.dataset.expanded = 'false';
-                                    toggle.textContent = '▽ Show more';
+                                    toggle.textContent = 'Mostrar todo el código ▽';
                                     pre.scrollTop = 0;
                                 } else {
                                     pre.style.maxHeight = 'none';
                                     pre.dataset.expanded = 'true';
-                                    toggle.textContent = '△ Show less';
+                                    toggle.textContent = 'Mostrar menos △';
                                 }
                             };
-                            // Start collapsed
-                            pre.style.maxHeight = '200px';
+                            // Start collapsed at 800px (shows ~40 lines)
+                            pre.style.maxHeight = '800px';
+                            pre.style.position = 'relative';
                             pre.dataset.expanded = 'false';
+                            // Add fade gradient at bottom
+                            const fade = document.createElement('div');
+                            fade.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:60px;background:linear-gradient(transparent,var(--code-bg));pointer-events:none;border-radius:0 0 8px 8px;';
+                            pre.style.overflow = 'hidden';
+                            pre.appendChild(fade);
                             pre.appendChild(toggle);
+                            // When expanded, remove fade
+                            const origClick = toggle.onclick;
+                            toggle.onclick = () => {
+                                origClick();
+                                if (pre.dataset.expanded === 'true') {
+                                    fade.style.display = 'none';
+                                    pre.style.overflow = 'auto';
+                                } else {
+                                    fade.style.display = 'block';
+                                    pre.style.overflow = 'hidden';
+                                }
+                            };
                         }
-                    }, 100);
+                    }, 150);
                 });
             });
         }
@@ -2065,9 +2086,9 @@
                                 const lastMsg = chatArea.querySelector('.message:last-child .message-content');
                                 if (lastMsg && data.code) {
                                     var codeDiv = document.createElement('div');
-                                    codeDiv.style.cssText = 'margin-top:10px;border-radius:8px;overflow:hidden;border:1px solid rgba(239,68,68,0.3);';
+                                    codeDiv.style.cssText = 'margin-top:10px;border-radius:8px;overflow:hidden;border:1px solid rgba(239,68,68,0.15);';
                                     var langLabel = data.language || 'code';
-                                    codeDiv.innerHTML = '<div style="padding:6px 10px;background:rgba(239,68,68,0.15);border-bottom:1px solid rgba(239,68,68,0.3);font-size:0.75rem;color:#f87171;">📄 Generated ' + langLabel + ' code <button onclick="var f=this.parentElement.nextElementSibling;f.style.display=f.style.display===\'none\'?\'block\':\'none\';this.textContent=this.textContent===\'Hide\'?\'Show\':\'Hide\';" style="float:right;background:rgba(239,68,68,0.2);border:1px solid rgba(239,68,68,0.4);border-radius:4px;padding:2px 8px;color:#f87171;cursor:pointer;font-size:0.7rem;">Hide</button></div><pre style="margin:0;padding:12px;background:rgba(30,30,46,0.95);max-height:400px;overflow-y:auto;font-size:0.82rem;line-height:1.5;"><code>' + data.code.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</code></pre>';
+                                    codeDiv.innerHTML = '<div style="padding:6px 10px;background:rgba(239,68,68,0.08);border-bottom:1px solid rgba(239,68,68,0.15);font-size:0.75rem;color:#f87171;">📄 Generated ' + langLabel + ' code <button onclick="var f=this.parentElement.nextElementSibling;f.style.display=f.style.display===\'none\'?\'block\':\'none\';this.textContent=this.textContent===\'Hide\'?\'Show\':\'Hide\';" style="float:right;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);border-radius:4px;padding:2px 8px;color:#f87171;cursor:pointer;font-size:0.7rem;">Hide</button></div><pre style="margin:0;padding:12px;background:rgba(30,30,46,0.95);overflow-y:auto;font-size:0.82rem;line-height:1.5;"><code>' + data.code.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</code></pre>';
                                     lastMsg.appendChild(codeDiv);
                                 }
                             } else if (data.type === 'write_permission_required') {
@@ -2100,7 +2121,7 @@
                                     contentEl.innerHTML = renderMarkdown(fullResponse);
                                     addCopyButtons(contentEl);
                                 }
-                            } else if (data.type === 'done') {
+                            }                             else if (data.type === 'done') {
                                 if (data.context_usage !== undefined) {
                                     updateContextIndicator(data.context_usage);
                                 }
@@ -2147,9 +2168,13 @@
                                     const finalRoute = data.is_local ? 'basic' : 'advanced';
                                     highlightActiveModelSelect(finalRoute, data.used_model);
                                 }
-                                // Final render with copy buttons and collapse toggles
+                                // Final render - ENSURE full content is displayed:
+                                // We need to keep the existing message structure instead of creating a new one
+                                // to preserve the streaming experience and ensure full content visibility
                                 if (contentEl) {
-                                    contentEl.innerHTML = renderMarkdown(fullResponse);
+                                    // Render the complete content
+                                    const finalContent = renderMarkdown(fullResponse);
+                                    contentEl.innerHTML = finalContent;
                                     addCopyButtons(contentEl);
                                 }
                                 // Don't call checkModelStatus here - it overwrites the badge with selected model info

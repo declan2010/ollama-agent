@@ -1,0 +1,18 @@
+[
+  "qwen3.5",
+  "qwen3",
+  "qwen2.5",
+  "qwen2",
+  "gemma4",
+  "gemma3",
+  "gemma2",
+  "llama3.2",
+  "llama3.1",
+  "llama3",
+  "nemotron",
+  "dolphin",
+  "north-mini-code",
+  "bonsai",
+  "laguna-xs-2.1:latest",
+  "llama3.2:latest"
+]
