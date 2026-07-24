@@ -3881,4 +3881,4 @@ if __name__ == '__main__':
     print(f"Ollama: {OLLAMA_BASE_URL}")
     print("=" * 50)
 
-    app.run(host='0.0.0.0', port=5000, debug=DEBUG)
+    app.run(host='0.0.0.0', port=5000, debug=DEBUG, threaded=True)
