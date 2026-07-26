@@ -2534,7 +2534,7 @@ def api_chat_stream():
                 'messages': api_messages,
                 'stream': True,
                 'keep_alive': KEEP_ALIVE,
-                'tools': [] if is_simple else (OLLAMA_TOOLS if local_model_supports_tools(model) else []),
+                'tools': [] if is_simple else (OLLAMA_TOOLS if (local_model_supports_tools(model) or is_cloud_model(model)) else []),
             }
 
             logger.info("Advanced model payload: model=%s, is_simple=%s, tools_count=%d", model, is_simple, len(payload.get('tools', [])))
