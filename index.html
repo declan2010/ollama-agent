@@ -1113,7 +1113,7 @@
                         if (height > 1200) {
                             const toggle = document.createElement('button');
                             toggle.className = 'copy-btn';
-                            toggle.textContent = 'Mostrar todo el código ▽';
+                            toggle.textContent = 'Show full code ▽';
                             toggle.style.right = '70px';
                             toggle.style.fontSize = '0.8rem';
                             toggle.style.fontWeight = '600';
@@ -1126,18 +1126,18 @@
                             toggle.style.zIndex = '10';
                             toggle.onclick = () => {
                                 if (pre.dataset.expanded === 'true') {
-                                    pre.style.maxHeight = '800px';
+                                    pre.style.maxHeight = '1200px';
                                     pre.dataset.expanded = 'false';
-                                    toggle.textContent = 'Mostrar todo el código ▽';
+                                    toggle.textContent = 'Show full code ▽';
                                     pre.scrollTop = 0;
                                 } else {
                                     pre.style.maxHeight = 'none';
                                     pre.dataset.expanded = 'true';
-                                    toggle.textContent = 'Mostrar menos △';
+                                    toggle.textContent = 'Show less △';
                                 }
                             };
-                            // Start collapsed at 800px (shows ~40 lines)
-                            pre.style.maxHeight = '800px';
+                            // Start collapsed at 1200px (shows ~60 lines)
+                            pre.style.maxHeight = '1200px';
                             pre.style.position = 'relative';
                             pre.dataset.expanded = 'false';
                             // Add fade gradient at bottom

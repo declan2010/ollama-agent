@@ -1877,9 +1877,9 @@ def api_chat_stream():
                                 link = r.get('url', r.get('link', ''))
                                 web_content += f"{idx}. {r['title']}\n   URL: {link}\n   {snippet}\n\n"
                         else:
-                            web_content = f"[Búsqueda sin resultados: {results[0].get('error', 'unknown') if results else 'no data'}]"
+                            web_content = f"[Search returned no results: {results[0].get('error', 'unknown') if results else 'no data'}]"
                     except Exception as e:
-                        web_content = f"[Error al buscar: {e}]"
+                        web_content = f"[Search error: {e}]"
                 if web_content:
                     logger.info("Web content obtained: %d chars", len(web_content))
                 else:
@@ -1889,12 +1889,12 @@ def api_chat_stream():
             api_messages = []
             # Model-specific system prompts based on known behavior
             MODEL_HINTS = {
-                'glm': 'IMPORTANT: Always use local_command tool to write/edit files. Use cat > /path/to/file << \'EOF\' ... EOF for creating files, sed -i for editing text in files. Use /home/cvc1/ instead of $HOME or ~. Do NOT output code as text.',
-                'minimax': 'Use tools when available. For file operations, use local_command with shell commands.',
-                'gemma': 'You have access to local_command, web_search, and fetch_article tools. Use them proactively.',
-                'kimi': 'Use the available tools for file operations and web searches. Do not just show code.',
-                'qwen': 'Always use local_command tool for writing files. Use cat > with heredoc syntax.',
-                'deepseek': 'Use the available tools for file operations and web searches. Do not just show code. Always use local_command tool to write/edit files.',
+                'glm': 'IMPORTANT: When asked to CREATE or WRITE files, ALWAYS SHOW THE FULL CODE in your response first using markdown code blocks, THEN use execute_write_command to save it to disk. Use /home/cvc1/ instead of $HOME or ~.',
+                'minimax': 'Use tools when available. For file operations, show full code in response first, then save with execute_write_command.',
+                'gemma': 'You have access to local_command, web_search, and fetch_article tools. Use them proactively. For file operations, show full code first then save.',
+                'kimi': 'Use the available tools for file operations and web searches. Show full code in your response first, then save files with execute_write_command.',
+                'qwen': 'For writing files, ALWAYS SHOW THE FULL CODE in your response first using markdown code blocks, then use execute_write_command to save. Use cat > with heredoc syntax.',
+                'deepseek': 'Use the available tools for file operations and web searches. Show full code in response first, then save files with execute_write_command.',
                 'laguna': 'IMPORTANT: Do NOT output your internal reasoning or thought process. Do NOT say things like "Okay, the user said..." or "I need to respond..." or "Let me think...". Respond directly and naturally to the user. Always respond in the same language the user writes in.',
             }
             model_hint = ''
@@ -1933,7 +1933,7 @@ def api_chat_stream():
             if model_hint:
                 system_content += '\n\n' + model_hint
             if web_content:
-                system_content += f'\n\n=== Información obtenida de internet ===\n{web_content}\n\nResponde al usuario basándote en esta información.'
+                system_content += f'\n\n=== Web search results ===\n{web_content}\n\nAnswer the user based on this information.'
             api_messages.append({
                 'role': 'system',
                 'content': system_content
