@@ -2777,21 +2777,56 @@ def api_chat_stream():
                                             'content': 'IMPORTANT: You have gathered enough information. STOP calling tools. Now provide a comprehensive analysis and response to the user based on all the information you have collected. Do NOT make any more tool calls. Respond directly with your analysis.'
                                         })
                                 logger.info("Follow-up round %d: sending %d tool results back to %s", round_num + 1, len(tool_results), model)
-                                followup_result = send_to_ollama(model, followup_messages, tools_for_this_round, stream=False)
-                                logger.info("Follow-up response: content_len=%d, has_tool_calls=%s, thinking=%s",
-                                           len(followup_result.get('message', {}).get('content', '')),
-                                           bool(followup_result.get('message', {}).get('tool_calls')),
-                                           bool(followup_result.get('message', {}).get('thinking', '')))
-
-                                if 'error' in followup_result:
-                                    full_response = f"Error: {followup_result['error']}"
-                                    logger.error("Follow-up error: %s", full_response)
-                                    yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                # Use streaming follow-up for better UX with long responses (code)
+                                followup_payload = {
+                                    'model': model,
+                                    'messages': followup_messages,
+                                    'stream': True,
+                                    'keep_alive': KEEP_ALIVE,
+                                    'tools': tools_for_this_round,
+                                }
+                                if ':cloud' not in model and '-cloud' not in model:
+                                    followup_payload['reasoning_effort'] = 'none'
+                                fu_data = json.dumps(followup_payload).encode('utf-8')
+                                fu_req = urllib.request.Request(
+                                    f'{OLLAMA_BASE_URL}/api/chat',
+                                    data=fu_data,
+                                    headers={'Content-Type': 'application/json'}
+                                )
+                                followup_content = ''
+                                followup_tool_calls = []
+                                fu_full_response = ''
+                                try:
+                                    with urllib.request.urlopen(fu_req, timeout=600) as fu_resp:
+                                        for fu_line in _iter_stream_with_timeout(fu_resp):
+                                            fu_line = fu_line.decode('utf-8').strip()
+                                            if not fu_line:
+                                                continue
+                                            try:
+                                                fu_chunk = json.loads(fu_line)
+                                            except json.JSONDecodeError:
+                                                continue
+                                            if fu_chunk.get('done'):
+                                                prompt_tokens = fu_chunk.get('prompt_eval_count', prompt_tokens)
+                                                followup_content = fu_full_response
+                                                followup_tool_calls = fu_chunk.get('message', {}).get('tool_calls', [])
+                                                break
+                                            fu_delta = fu_chunk.get('message', {}).get('content', '')
+                                            if fu_delta:
+                                                fu_full_response += fu_delta
+                                                full_response += fu_delta
+                                                sse_data = json.dumps({'type': 'token', 'content': fu_delta, 'ts': round(time.time() - start_time, 2)})
+                                                yield f"data: {sse_data}\n\n"
+                                except Exception as fu_err:
+                                    logger.error("Follow-up streaming error: %s", fu_err)
+                                    yield f"data: {json.dumps({'type': 'error', 'content': str(fu_err)[:300]})}\n\n"
                                     break
+                                followup_result = {'message': {'content': followup_content, 'tool_calls': followup_tool_calls}}
+                                logger.info("Follow-up response: content_len=%d, has_tool_calls=%s",
+                                           len(followup_content), bool(followup_tool_calls))
 
-                                followup_msg = followup_result.get('message', {})
-                                followup_content = followup_msg.get('content', '')
-                                followup_tool_calls = followup_msg.get('tool_calls', [])
+                                if not followup_content and not followup_tool_calls:
+                                    logger.warning("Follow-up returned empty response")
 
                                 # If model gives both content and tool calls, prefer content
                                 if followup_content and not followup_tool_calls:
@@ -2806,31 +2841,7 @@ def api_chat_stream():
                                             followup_messages.append({'role': 'tool', 'content': tr, 'tool_call_id': f'fu_dsml_{uuid.uuid4().hex[:8]}'})
                                         continue
                                     full_response = fix_double_encoding(followup_content)
-                                    # Check if the follow-up content is actually a JSON/DSML tool call
-                                    _fu_stripped = followup_content.strip()
-                                    # Clean XML tags
-                                    _fu_cleaned = re.sub(r'</?arg_value>', '', _fu_stripped)
-                                    _fu_cleaned = re.sub(r'</?tool_call[^>]*>', '', _fu_cleaned).strip()
-                                    _fu_json_match = JSON_TOOL_PATTERN.search(_fu_cleaned)
-                                    if not _fu_json_match:
-                                        _fu_json_match = JSON_TOOL_PATTERN_SINGLE.search(_fu_cleaned)
-                                    if _fu_json_match:
-                                        _fu_tn = _fu_json_match.group(1)
-                                        _fu_ps = _fu_json_match.group(2)
-                                        try:
-                                            _fu_params = json.loads(_fu_ps)
-                                        except json.JSONDecodeError:
-                                            try:
-                                                _fu_params = json.loads(_fu_ps.replace("'", '"'))
-                                            except json.JSONDecodeError:
-                                                _fu_params = {}
-                                        logger.info("Follow-up content is JSON tool call: %s(%s)", _fu_tn, _fu_params)
-                                        followup_messages.append({'role': 'assistant', 'content': '', 'tool_calls': [{'function': {'name': _fu_tn, 'arguments': _fu_params}}]})
-                                        _fu_tr = execute_tool_call({'function': {'name': _fu_tn, 'arguments': _fu_params}}, current_chat_id)
-                                        followup_messages.append({'role': 'tool', 'content': _fu_tr, 'tool_call_id': f'fu_json_{uuid.uuid4().hex[:8]}'})
-                                        continue
-                                    yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
-                                    prompt_tokens = followup_result.get('prompt_eval_count', prompt_tokens)
+                                    # Tokens already streamed above, no need to re-send
                                     break  # Got a text response, done
                                 elif followup_content and followup_tool_calls:
                                     # Model has partial content but wants more tools
@@ -2845,9 +2856,8 @@ def api_chat_stream():
                                     if has_write_cmd:
                                         # Let write commands execute - treat as normal tool calls
                                         logger.info("Model has partial content + write tool calls, allowing execution")
-                                        # Send partial content first
+                                        # Content already streamed by follow-up, no need to re-send
                                         full_response = fix_double_encoding(followup_content)
-                                        yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                                         # Now execute the write tool calls
                                         followup_messages.append({'role': 'assistant', 'content': followup_content, 'tool_calls': followup_tool_calls})
                                         for tc in followup_tool_calls:
