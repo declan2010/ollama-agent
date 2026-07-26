@@ -2826,7 +2826,19 @@ def api_chat_stream():
                                            len(followup_content), bool(followup_tool_calls))
 
                                 if not followup_content and not followup_tool_calls:
-                                    logger.warning("Follow-up returned empty response")
+                                    logger.warning("Follow-up returned empty response for %s", model)
+                                    # Fallback: if we have search results, show them directly
+                                    search_results_text = ''
+                                    for tr in tool_results:
+                                        tr_content = tr.get('content', '')
+                                        if isinstance(tr_content, str) and tr_content.startswith('Search results:') and 'http' in tr_content:
+                                            search_results_text = tr_content
+                                            break
+                                    if search_results_text:
+                                        logger.info("Showing search results fallback")
+                                        full_response = search_results_text
+                                        yield f"data: {json.dumps({'type': 'token', 'content': search_results_text})}\n\n"
+                                        break
 
                                 # If model gives both content and tool calls, prefer content
                                 if followup_content and not followup_tool_calls:
