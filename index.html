@@ -1107,59 +1107,7 @@
                     pre.style.position = 'relative';
                     pre.appendChild(btn);
 
-                    // Add collapse toggle for very long code blocks (> 1200px ~60 lines)
-                    setTimeout(() => {
-                        const height = pre.scrollHeight;
-                        if (height > 1200) {
-                            const toggle = document.createElement('button');
-                            toggle.className = 'copy-btn';
-                            toggle.textContent = 'Show full code ▽';
-                            toggle.style.right = '70px';
-                            toggle.style.fontSize = '0.8rem';
-                            toggle.style.fontWeight = '600';
-                            toggle.style.opacity = '1';
-                            toggle.style.background = 'var(--accent)';
-                            toggle.style.color = '#fff';
-                            toggle.style.padding = '6px 14px';
-                            toggle.style.borderRadius = '6px';
-                            toggle.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
-                            toggle.style.zIndex = '10';
-                            toggle.onclick = () => {
-                                if (pre.dataset.expanded === 'true') {
-                                    pre.style.maxHeight = '1200px';
-                                    pre.dataset.expanded = 'false';
-                                    toggle.textContent = 'Show full code ▽';
-                                    pre.scrollTop = 0;
-                                } else {
-                                    pre.style.maxHeight = 'none';
-                                    pre.dataset.expanded = 'true';
-                                    toggle.textContent = 'Show less △';
-                                }
-                            };
-                            // Start collapsed at 1200px (shows ~60 lines)
-                            pre.style.maxHeight = '1200px';
-                            pre.style.position = 'relative';
-                            pre.dataset.expanded = 'false';
-                            // Add fade gradient at bottom
-                            const fade = document.createElement('div');
-                            fade.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:60px;background:linear-gradient(transparent,var(--code-bg));pointer-events:none;border-radius:0 0 8px 8px;';
-                            pre.style.overflow = 'hidden';
-                            pre.appendChild(fade);
-                            pre.appendChild(toggle);
-                            // When expanded, remove fade
-                            const origClick = toggle.onclick;
-                            toggle.onclick = () => {
-                                origClick();
-                                if (pre.dataset.expanded === 'true') {
-                                    fade.style.display = 'none';
-                                    pre.style.overflow = 'auto';
-                                } else {
-                                    fade.style.display = 'block';
-                                    pre.style.overflow = 'hidden';
-                                }
-                            };
-                        }
-                    }, 150);
+                    // Code blocks are shown fully expanded by default so users can see all generated code
                 });
             });
         }
