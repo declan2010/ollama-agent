@@ -3679,6 +3679,22 @@ def api_chat():
     })
 
 
+@app.route('/api/chat/stream', methods=['POST'])
+def api_chat_stream():
+    """Streaming chat endpoint (fallback to non‑streaming response)."""
+    # Reuse the non‑streaming logic to generate a response
+    resp = api_chat()
+    # Extract JSON payload as text
+    data = resp.get_data(as_text=True)
+    def generate():
+        # Send the JSON payload as an SSE data event
+        yield f"data: {data}\n\n"
+        # Final done event for consistency
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
 @app.route('/api/sessions')
 def api_sessions():
     """API to list all sessions"""
