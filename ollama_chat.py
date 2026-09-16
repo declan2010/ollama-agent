@@ -16,6 +16,9 @@ from collections import defaultdict
 from datetime import datetime
 from flask import Flask, Response, render_template, request, jsonify, session
 
+# Global placeholder for heuristic flag used during routing; will be set per-request if needed
+needs_tools_heuristic = False
+
 # --- Configuration ---
 SESSIONS_DIR = os.environ.get('SESSIONS_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sessions'))
 DEBUG = os.environ.get('FLASK_DEBUG', 'false').lower() in ('true', '1', 'yes')
@@ -66,7 +69,10 @@ _tool_models_cache = _load_tool_models()
 def local_model_supports_tools(model_name):
     """Check if a local model is known to support tool calling."""
     model_lower = model_name.lower()
-    for supported in _tool_models_cache:
+    # Read snapshot under lock for thread-safe iteration
+    with _tool_models_lock:
+        cache_snapshot = list(_tool_models_cache)
+    for supported in cache_snapshot:
         if supported.lower() in model_lower:
             return True
     return False
@@ -1175,7 +1181,12 @@ def secure_path(path, allowed_prefixes=None):
     resolved = os.path.normpath(os.path.abspath(path))
     if allowed_prefixes:
         for prefix in allowed_prefixes:
-            if resolved.startswith(os.path.normpath(os.path.abspath(prefix))):
+            normed_prefix = os.path.normpath(os.path.abspath(prefix))
+            # Ensure prefix ends with / so startswith can't match
+            # /home/cvc12/ -> matches /home/cvc1/ — false positive!
+            if not normed_prefix.endswith(os.sep):
+                normed_prefix += os.sep
+            if resolved.startswith(normed_prefix) or resolved == normed_prefix.rstrip(os.sep):
                 return resolved
         return None
     return resolved
@@ -1618,16 +1629,16 @@ def _likely_needs_tools(message):
         return True
     
     # Web browsing/navigation - detect URLs and "ir a" patterns
+    # Only action-oriented keywords — domain extensions and protocols are
+    # handled by the regex below (line ~1635), avoiding false positives like
+    # "usa url corta" or "me llamo .com empresa"
     web_nav_keywords = [
         'navega', 'navegar', 'navegá', 'navegador', 'navegación',
         'abre la página', 'abre el sitio', 'abre la web', 'abre ese link',
-        've a esta', 've a ese', 've al sitio', 'vamos a',
-        'visit', 'visitar', 'ir a', 'entra a', 'entrar a',
-        'carga la página', 'carga el sitio', 'muestra la página',
-        'abrir', 'abre', 'open', 'opening',
-        'url', 'http', 'https', 'www.', '.com', '.org', '.net', '.io',
-        'página web', 'sitio web', 'site', 'website', 'web page',
-        'browser', 'browsing', 'navigate',
+        've a esta', 've a ese', 've al sitio',
+        'visit', 'visitar', 'entra a', 'entrar a',
+        'carga la página', 'muestra la página',
+        'página web', 'pagina web', 'sitio web', 'web page',
     ]
     if any(kw in msg_lower for kw in web_nav_keywords):
         return True
@@ -1774,6 +1785,14 @@ def api_chat_stream():
     # Capture session data before generator (Flask session unavailable inside generator)
     current_chat_id = session['chat_id']
 
+    # ⚠️ CRITICAL FIX: Clean stale state from previous questions in the same session.
+    # If a write permission was granted with 'once' or the last answer triggered
+    # check_write_permission for a command that doesn't belong to this new question,
+    # the stale permission would hang waiting for an event that never fires.
+    with _permissions_lock:
+        _pending_permissions.clear()
+    _session_write_permissions.pop(current_chat_id, None)
+
     session_data = load_session(current_chat_id) or {
         'model': model,
         'fallback_model': fallback_model,
@@ -1826,7 +1845,7 @@ def api_chat_stream():
             elif _needs_web:
                 route = 'advanced_direct'
                 route_reason = 'needs_web'
-            elif _likely_needs_tools(user_message):
+            elif needs_tools_heuristic:
                 route = 'advanced_direct'
                 route_reason = 'needs_tools'
             else:
@@ -1920,7 +1939,10 @@ def api_chat_stream():
 
             # Detect simple messages that don't need tools
             simple_greetings = ['hola', 'hello', 'hi', 'hey', 'buenos días', 'buenas tardes', 'buenas noches', 'qué tal', 'como estas', 'cómo estás', 'how are you', 'sup', 'saludos', 'gracias', 'thanks', 'thank you', 'bye', 'adiós', 'chao', 'ok', 'si', 'no', 'yes', 'nope']
-            is_simple = user_message.strip().lower() in simple_greetings or len(user_message.strip()) < 15 and not any(kw in user_message.lower() for kw in ['archivo', 'file', 'crear', 'create', 'leer', 'read', 'listar', 'list', 'buscar', 'search', 'comando', 'command', 'ejecutar', 'run', 'directorio', 'directory', 'proyecto', 'project', 'analizar', 'analyze', 'carpeta', 'folder', 'escribir', 'write', 'editar', 'edit'])
+            is_simple = (
+                user_message.strip().lower() in simple_greetings
+                or (len(user_message.strip()) < 15 and not needs_tools_heuristic)
+            )
 
             # Context override: if previous messages used tools, this is not simple
             if _context_needs_advanced:
@@ -1972,7 +1994,7 @@ def api_chat_stream():
             # --- Base model routing: try simpler model first for simple conversations ---
             base_model_succeeded = False
             
-            if force_basic or (not force_advanced and not _context_needs_advanced and not _likely_needs_tools(user_message)):
+            if force_basic or (not force_advanced and not _context_needs_advanced and not needs_tools_heuristic):
                 try:
                     import urllib.request as _urllib_base
                     
@@ -2489,7 +2511,7 @@ def api_chat_stream():
                     logger.info("Force basic safety net: using base model response (len=%d)", len(base_full_response))
                 else:
                     logger.warning("Force basic mode but no base model response available")
-            elif _likely_needs_tools(user_message):
+            elif needs_tools_heuristic:
                 logger.info("Query likely needs tools: skipping base model, using %s directly", model)
 
             # If base model succeeded, save and return early (skip advanced model flow)
@@ -3450,6 +3472,11 @@ def api_chat():
 
     # Capture session data (non-streaming, session is accessible)
     current_chat_id = session['chat_id']
+
+    # ⚠️ Same cleanup fix as streaming endpoint (see api_chat_stream)
+    with _permissions_lock:
+        _pending_permissions.clear()
+    _session_write_permissions.pop(current_chat_id, None)
 
     session_data = load_session(current_chat_id) or {
         'model': model,
