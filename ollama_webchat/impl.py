@@ -2810,6 +2810,9 @@ def api_chat_stream():
                                 yield f"data: {sse_data}\n\n"
 
                         # If we have pending tool calls, process them
+                        # Emit thinking event while tool calls execute
+                        if tool_calls_buffer:
+                            yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
                         # IMPORTANT: Merge streaming fragments first — Ollama sends
                         # tool calls incrementally, so we may have multiple partial
                         # chunks for the same tool call that need to be assembled.
@@ -3066,12 +3069,16 @@ def api_chat_stream():
                                             tc_id = tc.get('id', f'tool_{round_num}_{len(followup_tool_calls)}')
                                             if tc_name == 'local_command':
                                                 cmd = tc_args.get('command', '')
+                                                # Emit thinking event while tool executes
+                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
                                                 if is_write_command(cmd):
                                                     # Auto-approve write command
                                                     logger.info("Auto-approving follow-up write: %s", cmd)
                                                     result = execute_write_command(cmd, current_chat_id)
                                                 else:
                                                     result = execute_local_command(cmd)
+                                                # Emit thinking done
+                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
                                                 # Emit html_preview if result contains preview marker
                                                 if '[HTML_PREVIEW:' in result:
                                                     matches = re.findall(r'\[HTML_PREVIEW:([^\]]+)\]', result)
@@ -3080,11 +3087,17 @@ def api_chat_stream():
                                                 followup_messages.append({'role': 'tool', 'content': result, 'tool_call_id': tc_id})
                                             elif tc_name == 'web_search':
                                                 q = tc_args.get('query', '')
+                                                # Emit thinking event while web search executes
+                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
                                                 results = web_search(q)
+                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
                                                 followup_messages.append({'role': 'tool', 'content': json.dumps(results[:5]), 'tool_call_id': tc_id})
                                             elif tc_name == 'fetch_article':
                                                 url = tc_args.get('url', '')
+                                                # Emit thinking event while fetch_article executes
+                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
                                                 article = fetch_article(url)
+                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
                                                 content = article.get('content', '')[:2000] if article.get('content') else f"Could not fetch {url}"
                                                 followup_messages.append({'role': 'tool', 'content': content, 'tool_call_id': tc_id})
                                         # Continue loop to get final response after write
@@ -3379,6 +3392,9 @@ def api_chat_stream():
                             # Send SSE event
                             sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
                             yield f"data: {sse_data}\n\n"
+
+                # Emit thinking done after tool calls complete
+                yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
 
                 # Check for DSML-style tool calls in the response (some models use DSML instead of native Ollama tool calls)
                 if full_response and not tool_calls_buffer:
