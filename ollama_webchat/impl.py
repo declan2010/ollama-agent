@@ -1742,7 +1742,7 @@ def _likely_needs_tools(message):
 
 
 STREAM_CHUNK_TIMEOUT = 120  # Max seconds to wait for each chunk
-STREAM_INITIAL_TIMEOUT = 300  # Max seconds to wait for the first chunk (model loading time)
+STREAM_INITIAL_TIMEOUT = 600  # Max seconds to wait for the first chunk (model loading time)
 MAX_THINKING_SECONDS = 90  # Max seconds for thinking mode before aborting
 
 
@@ -2059,8 +2059,12 @@ def api_chat_stream():
 
             # --- Base model routing: try simpler model first for simple conversations ---
             base_model_succeeded = False
-            
-            if force_basic or (not force_advanced and not _context_needs_advanced and not needs_tools_heuristic):
+
+            # If force_advanced is set, skip base model entirely.
+            # Also skip if base_model equals the advanced model (would cause timeout on large models).
+            skip_base = force_advanced or (base_model == model)
+
+            if force_basic or (not force_advanced and not _context_needs_advanced and not needs_tools_heuristic and not skip_base):
                 try:
                     import urllib.request as _urllib_base
                     
