@@ -1760,13 +1760,24 @@ def _is_model_loaded(model_name):
 
 def _set_stream_timeout(response, timeout):
     """Set read timeout on an HTTP response's underlying socket."""
+    import socket as _socket
     try:
+        # Try to get the socket from various possible locations
+        sock = None
         if hasattr(response, '_sock') and response._sock:
-            response._sock.settimeout(timeout)
-        elif hasattr(response, 'fp') and hasattr(response.fp, '_sock') and response.fp._sock:
-            response.fp._sock.settimeout(timeout)
-    except Exception:
-        pass
+            sock = response._sock
+        elif hasattr(response, 'fp') and response.fp:
+            if hasattr(response.fp, '_sock') and response.fp._sock:
+                sock = response.fp._sock
+            elif hasattr(response.fp, 'raw') and hasattr(response.fp.raw, '_sock'):
+                sock = response.fp.raw._sock
+            elif hasattr(response.fp, 'raw') and hasattr(response.fp.raw, 'sock'):
+                sock = response.fp.raw.sock
+        if sock is not None:
+            sock.settimeout(timeout)
+            logger.debug("Set socket timeout to %ds", timeout)
+    except Exception as e:
+        logger.debug("Could not set stream timeout: %s", e)
 
 
 def _iter_stream_with_timeout(response, initial=False):
@@ -2659,13 +2670,24 @@ def api_chat_stream():
 
             logger.info("Sending request to Ollama model=%s at %s", model, datetime.now().isoformat())
             with urllib.request.urlopen(req, timeout=STREAM_INITIAL_TIMEOUT) as response:
+                logger.info("Got response from Ollama, status=%s, headers=%s", response.status, dict(response.headers))
                 tool_calls_buffer = []
                 current_tool_call = None
                 content_buffer = ''
                 is_thinking = False
                 thinking_start = 0
+                chunk_count = 0
+                first_chunk_time = None
 
                 for line in _iter_stream_with_timeout(response, initial=True):
+                    chunk_count += 1
+                    if first_chunk_time is None:
+                        first_chunk_time = time.time()
+                        logger.info("First chunk received after %.2fs", first_chunk_time - start_time)
+                    if chunk_count <= 3:
+                        logger.info("Chunk %d: %s", chunk_count, line[:200])
+                    if chunk_count % 50 == 0:
+                        logger.info("Received %d chunks so far", chunk_count)
                     line = line.decode('utf-8').strip()
                     if not line:
                         continue
