@@ -2037,10 +2037,8 @@ def api_chat_stream():
 
             # Detect simple messages that don't need tools
             simple_greetings = ['hola', 'hello', 'hi', 'hey', 'buenos días', 'buenas tardes', 'buenas noches', 'qué tal', 'como estas', 'cómo estás', 'how are you', 'sup', 'saludos', 'gracias', 'thanks', 'thank you', 'bye', 'adiós', 'chao', 'ok', 'si', 'no', 'yes', 'nope']
-            is_simple = (
-                user_message.strip().lower() in simple_greetings
-                or (len(user_message.strip()) < 15 and not needs_tools_heuristic)
-            )
+            # Only treat as simple if it's a very short greeting
+            is_simple = user_message.strip().lower() in simple_greetings
 
             # Context override: if previous messages used tools, this is not simple
             if _context_needs_advanced:
