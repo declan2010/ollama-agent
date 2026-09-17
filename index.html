@@ -1908,7 +1908,7 @@
                     typingIndicator.classList.remove('active');
                     safetyTimeoutId = null;
                 }
-            }, 600000);
+            }, 180000);
 
             // Try streaming first
             try {
@@ -1980,6 +1980,7 @@
 
                         try {
                             const data = JSON.parse(trimmed.slice(6));
+                            console.log('[STREAM]', data.type, data.content ? data.content.substring(0, 50) : '');
 
                             if (data.type === 'token') {
                                 // Remove thinking indicator when real content arrives
@@ -2100,6 +2101,15 @@
                                     addCopyButtons(contentEl);
                                 }
                             }                             else if (data.type === 'done') {
+                                try {
+                                if (isWaiting) {
+                                    // Final render - ensure all content is visible
+                                    if (contentEl && fullResponse) {
+                                        const finalContent = renderMarkdown(fullResponse);
+                                        contentEl.innerHTML = finalContent;
+                                        addCopyButtons(contentEl);
+                                    }
+                                }
                                 if (data.context_usage !== undefined) {
                                     updateContextIndicator(data.context_usage);
                                 }
@@ -2158,6 +2168,10 @@
                                 // Don't call checkModelStatus here - it overwrites the badge with selected model info
                                 // The badge was already updated by updateBadgeForUsedModel above
                                 // checkModelStatus();
+                                }
+                                } catch (doneErr) {
+                                    console.error('[DONE HANDLER ERROR]', doneErr);
+                                }
                             }
                         } catch (parseErr) {
                             // Skip unparseable lines
