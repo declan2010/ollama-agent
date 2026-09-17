@@ -1842,9 +1842,18 @@ def api_chat_stream():
         vresp = _urllib_validate.urlopen(f'{OLLAMA_BASE_URL}/api/tags')
         vdata = json.loads(vresp.read().decode('utf-8'))
         available_models = [m.get('name', '') for m in vdata.get('models', [])]
-        model_matches = any(base_model == m or base_model + ':latest' == m or m.startswith(base_model) for m in available_models)
+        # Case-insensitive comparison (Ollama sometimes has different casing)
+        base_lower = base_model.lower() if base_model else ''
+        model_matches = any(
+            base_lower == m.lower() or
+            base_lower + ':latest' == m.lower() or
+            m.lower().startswith(base_lower + ':') or
+            base_lower.startswith(m.lower() + ':') or
+            base_lower == m.lower().split(':')[0]
+            for m in available_models
+        )
         if not model_matches:
-            logger.warning("Base model '%s' not found in available models, falling back to %s", base_model, BASE_CHAT_MODEL)
+            logger.warning("Base model '%s' not found in available models, falling back to %s. Available: %s", base_model, BASE_CHAT_MODEL, available_models[:5])
             base_model = BASE_CHAT_MODEL
     except Exception:
         pass
@@ -2716,6 +2725,10 @@ def api_chat_stream():
                     # Total time limit
                     if time.time() - start_time > max_stream_time:
                         logger.warning("Stream exceeded %ds, breaking", max_stream_time)
+                        break
+                    # Safety: if we have too many chunks without done, break (prevents infinite loops)
+                    if chunk_count > 1000 and not chunk.get('done'):
+                        logger.warning("Stream exceeded 1000 chunks without done, breaking")
                         break
                     line = line.decode('utf-8').strip()
                     if not line:
