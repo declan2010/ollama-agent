@@ -1816,9 +1816,14 @@ def api_chat_stream():
     force_basic = data.get('force_basic', False)
     logger.info("STREAM REQUEST force_basic=%s (raw=%s, type=%s) force_advanced=%s (raw=%s)", force_basic, repr(data.get('force_basic')), type(data.get('force_basic')).__name__, force_advanced, repr(data.get('force_advanced')))
     if not base_model:
-        # If no base model is specified, always use a lightweight model to avoid timeouts
+        # If no base model is specified, use a smart default:
+        # - If advanced model is cloud → don't use a local base model (would cause errors)
+        # - If advanced model is local → use lightweight BASE_CHAT_MODEL
         # The user can explicitly set force_advanced to skip the base model entirely
-        base_model = BASE_CHAT_MODEL
+        if is_cloud_model(model):
+            base_model = ''  # No base model when using cloud
+        else:
+            base_model = BASE_CHAT_MODEL
 
     # Validate base_model exists, fall back to default if not
     try:
@@ -1885,6 +1890,9 @@ def api_chat_stream():
         base_eval_count = 0
         start_time = time.time()
         used_model = model  # Track which model actually responds
+        logger.info("STREAM START: model=%s, force_advanced=%s, force_basic=%s, base_model=%s, user_msg_len=%d",
+                    model, force_advanced, force_basic, base_model, len(user_message))
+        yield f"data: {json.dumps({'type': 'routing', 'model': model, 'force_advanced': force_advanced, 'force_basic': force_basic})}\n\n"
         try:
             # Determine routing: base model for simple questions, advanced for code/tools
             route = 'base_first'
@@ -2064,7 +2072,9 @@ def api_chat_stream():
 
             # If force_advanced is set, skip base model entirely.
             # Also skip if base_model equals the advanced model (would cause timeout on large models).
-            skip_base = force_advanced or (base_model == model)
+            # Also skip if advanced model is cloud (no point using a local base model first).
+            # Also skip if no base_model is specified (empty string).
+            skip_base = force_advanced or (base_model == model) or is_cloud_model(model) or not base_model
 
             if force_basic or (not force_advanced and not _context_needs_advanced and not needs_tools_heuristic and not skip_base):
                 try:
