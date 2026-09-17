@@ -2900,7 +2900,7 @@ def api_chat_stream():
 
                             # Make follow-up request(s) with tool results
                             # Model may request more tools - limit rounds, then force text response
-                            max_followup_rounds = 3
+                            max_followup_rounds = 2
                             for round_num in range(max_followup_rounds):
                                 tools_for_this_round = OLLAMA_TOOLS
                                 if round_num >= 2:
@@ -3212,8 +3212,24 @@ def api_chat_stream():
                                             yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                                             prompt_tokens = followup_result2.get('prompt_eval_count', prompt_tokens)
                                             break
-                                    full_response = full_response + "\n\n_(El modelo intentó usar herramientas pero no completó su respuesta)_" if full_response else "(No response from model)"
-                                    yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                    # If we have tool results but no final text response, show the tool results
+                                    if not full_response and followup_tool_calls:
+                                        tool_summaries = []
+                                        for m in followup_messages:
+                                            if m.get('role') == 'tool' and m.get('content'):
+                                                tool_summaries.append(m['content'][:500])
+                                        if tool_summaries:
+                                            full_response = "📋 **Resultados de herramientas:**\n\n" + "\n\n---\n\n".join(tool_summaries)
+                                            yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                        else:
+                                            full_response = "(No response from model)"
+                                            yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+                                    elif full_response:
+                                        # Keep what we have
+                                        yield f"data: {json.dumps({'type': 'token', 'content': '\n\n_(El modelo usó herramientas pero no completó su respuesta)_'})}\n\n"
+                                    else:
+                                        full_response = "(No response from model)"
+                                        yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
                                     break
                             else:
                                 # Max rounds reached - force final response without tools
