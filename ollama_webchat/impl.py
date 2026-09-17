@@ -874,8 +874,8 @@ def process_ollama_response(model, messages, tools=None):
             if func_name == 'local_command':
                 cmd = func_args.get('command', '')
                 if is_write_command(cmd):
-                    logger.warning("Non-streaming: denying write command (no permission popup available): %s", cmd[:200])
-                    result = "[Permission denied] Write commands are not available in non-streaming mode. Please use the streaming chat interface for file operations."
+                    # Allow write commands in non‑streaming mode (auto‑approve)
+                    result = execute_write_command(cmd, '')
                 else:
                     result = execute_local_command(cmd)
                 tool_results.append({
