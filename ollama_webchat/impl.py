@@ -2725,11 +2725,16 @@ def api_chat_stream():
                     # Total time limit
                     if time.time() - start_time > max_stream_time:
                         logger.warning("Stream exceeded %ds, breaking", max_stream_time)
-                        break
+                        # Send done event before breaking so frontend doesn't hang
+                        elapsed = round(time.time() - start_time, 2)
+                        yield f"data: {json.dumps({'type': 'done', 'context_usage': 0, 'eval_count': chunk_count, 'elapsed': elapsed, 'used_model': model, 'is_local': not is_cloud_model(model)})}\n\n"
+                        return
                     # Safety: if we have too many chunks without done, break (prevents infinite loops)
                     if chunk_count > 1000 and not chunk.get('done'):
                         logger.warning("Stream exceeded 1000 chunks without done, breaking")
-                        break
+                        elapsed = round(time.time() - start_time, 2)
+                        yield f"data: {json.dumps({'type': 'done', 'context_usage': 0, 'eval_count': chunk_count, 'elapsed': elapsed, 'used_model': model, 'is_local': not is_cloud_model(model)})}\n\n"
+                        return
                     line = line.decode('utf-8').strip()
                     if not line:
                         continue
@@ -2991,14 +2996,19 @@ def api_chat_stream():
                                                 full_response += fu_delta
                                                 sse_data = json.dumps({'type': 'token', 'content': fu_delta, 'ts': round(time.time() - start_time, 2)})
                                                 yield f"data: {sse_data}\n\n"
-                                            # Safety: if follow-up takes too long, break out
+                                            # Safety: if follow-up takes too long, break out and send done
                                             if time.time() - followup_start > 90:
                                                 logger.warning("Follow-up taking too long (>90s), breaking out")
-                                                break
+                                                elapsed = round(time.time() - start_time, 2)
+                                                yield f"data: {json.dumps({'type': 'done', 'context_usage': 0, 'eval_count': chunk_count, 'elapsed': elapsed, 'used_model': model, 'is_local': not is_cloud_model(model)})}\n\n"
+                                                return
                                 except Exception as fu_err:
                                     logger.error("Follow-up streaming error: %s", fu_err)
                                     yield f"data: {json.dumps({'type': 'error', 'content': str(fu_err)[:300]})}\n\n"
-                                    break
+                                    # Send done event so frontend doesn't hang
+                                    elapsed = round(time.time() - start_time, 2)
+                                    yield f"data: {json.dumps({'type': 'done', 'context_usage': 0, 'eval_count': chunk_count, 'elapsed': elapsed, 'used_model': model, 'is_local': not is_cloud_model(model)})}\n\n"
+                                    return
                                 followup_result = {'message': {'content': followup_content, 'tool_calls': followup_tool_calls}}
                                 logger.info("Follow-up response: content_len=%d, has_tool_calls=%s",
                                            len(followup_content), bool(followup_tool_calls))
