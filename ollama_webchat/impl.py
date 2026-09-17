@@ -314,12 +314,25 @@ def execute_local_command(cmd):
             logger.warning("Blocked dangerous command: %s", cmd)
             return "[Security] This command is not allowed."
 
-        # Special handling for xdg-open / open - intercept HTML files for in-chat preview
-        parts = cmd.split()
-        if parts and parts[0] in ('xdg-open', 'open') and len(parts) > 1:
-            target = parts[-1]
-            if target.endswith('.html') or target.endswith('.htm'):
-                return f"[HTML_PREVIEW:{target}]"
+        # Alias for simple read commands
+        if cmd.lower().startswith('read '):
+            # Convert to cat for compatibility with validator
+            cmd = 'cat ' + cmd[5:].strip()
+            # Re-validate after transformation
+            parsed = validate_command(cmd)
+            if parsed is None:
+                return "[Security] This command is not allowed."
+            # Execute directly with subprocess (bypass further validation steps)
+            result = sp.run(
+                parsed,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=os.path.expanduser('~')
+            )
+            output = result.stdout.strip() or result.stderr.strip() or "Command executed successfully (no output)"
+            logger.info("Executed read alias command: %s", ' '.join(parsed))
+            return output[:5000]
 
         # Validate and parse
         parsed = validate_command(cmd)
