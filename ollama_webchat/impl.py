@@ -1741,7 +1741,7 @@ def _likely_needs_tools(message):
     return False
 
 
-STREAM_CHUNK_TIMEOUT = 120  # Max seconds to wait for each chunk
+STREAM_CHUNK_TIMEOUT = 300  # Max seconds to wait for each chunk (5 min for cloud models)
 STREAM_INITIAL_TIMEOUT = 600  # Max seconds to wait for the first chunk (model loading time)
 MAX_THINKING_SECONDS = 90  # Max seconds for thinking mode before aborting
 
@@ -2633,12 +2633,17 @@ def api_chat_stream():
                 return
 
             # --- Advanced model flow (with tools) ---
+            # For cloud models, don't send tools (may not be supported or cause issues)
+            if is_cloud_model(model):
+                tools_for_advanced = []
+            else:
+                tools_for_advanced = [] if is_simple else (OLLAMA_TOOLS if local_model_supports_tools(model) else [])
             payload = {
                 'model': model,
                 'messages': api_messages,
                 'stream': True,
                 'keep_alive': KEEP_ALIVE,
-                'tools': [] if is_simple else (OLLAMA_TOOLS if (local_model_supports_tools(model) or is_cloud_model(model)) else []),
+                'tools': tools_for_advanced,
             }
 
             logger.info("Advanced model payload: model=%s, is_simple=%s, tools_count=%d", model, is_simple, len(payload.get('tools', [])))
