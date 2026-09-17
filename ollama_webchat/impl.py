@@ -42,7 +42,9 @@ def already_read(path):
 needs_tools_heuristic = False
 
 # --- Configuration ---
-SESSIONS_DIR = os.environ.get('SESSIONS_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sessions'))
+# Sessions directory: use parent directory's 'sessions' folder (project root) for backward compatibility
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SESSIONS_DIR = os.environ.get('SESSIONS_DIR', os.path.join(_PROJECT_ROOT, 'sessions'))
 DEBUG = os.environ.get('FLASK_DEBUG', 'false').lower() in ('true', '1', 'yes')
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
 KEEP_ALIVE = os.environ.get('OLLAMA_KEEP_ALIVE', '30m')
