@@ -876,9 +876,9 @@
                 <div class="model-selector" id="basicModelContainer">
                     <label>Basic:</label>
                     <select id="baseModelSelect">
-                        <option value="">Auto</option>
+                        <option value="" selected>Auto</option>
                         {% for model in local_models %}
-                        <option value="{{ model }}" {% if model == 'gemma4:e4b' %}selected{% endif %}>{{ model }}</option>
+                        <option value="{{ model }}">{{ model }}</option>
                         {% endfor %}
                     </select>
                     <input type="checkbox" id="forceBasic" title="Force Basic model only (no escalation)" style="cursor:pointer;" autocomplete="off">
@@ -1955,6 +1955,7 @@
                     }),
                     signal: currentAbortController.signal
                 });
+                console.log('[SEND] model:', modelSelect.value, 'base_model:', baseModelSelect ? baseModelSelect.value : 'N/A', 'force_basic:', document.getElementById('forceBasic').checked);
 
                 if (!response.ok) {
                     const errData = await response.json().catch(() => ({}));
