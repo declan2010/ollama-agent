@@ -3523,18 +3523,6 @@ def api_chat_stream():
         used_size = get_model_size_from_ps(used_model)  # Get actual file size from /api/ps
         yield f"data: {json.dumps({'type': 'done', 'context_usage': prompt_tokens, 'eval_count': eval_count, 'elapsed': elapsed, 'used_model': used_model, 'is_local': is_local, 'parameter_size': used_param_size, 'size': used_size})}\n\n"
 
-        except BaseException as be:
-            logger.exception("Unhandled exception in streaming generator: %s", be)
-            try:
-                err_msg = str(be)[:500].replace('<', '&lt;').replace('>', '&gt;')
-                yield f"data: {json.dumps({'type': 'error', 'content': f'**Error interno:** {err_msg}'})}\n\n"
-                yield f"data: {json.dumps({'type': 'done', 'context_usage': 0, 'elapsed': round(time.time() - start_time, 2), 'used_model': used_model, 'is_local': not is_cloud_model(used_model)})}\n\n"
-            except Exception:
-                pass
-        finally:
-            # Safety net: always log end of streaming
-            logger.info("Streaming ended for model=%s, total_elapsed=%.2fs, response_len=%d", model, time.time() - start_time, len(full_response))
-
     return Response(generate(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
