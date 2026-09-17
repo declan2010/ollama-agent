@@ -2659,6 +2659,21 @@ def api_chat_stream():
 
             logger.info("Advanced model payload: model=%s, is_simple=%s, tools_count=%d", model, is_simple, len(payload.get('tools', [])))
 
+            # Pre-validate that the model exists
+            try:
+                import urllib.request as _vreq
+                _vresp = _vreq.urlopen(f'{OLLAMA_BASE_URL}/api/tags', timeout=10)
+                _vdata = json.loads(_vresp.read().decode('utf-8'))
+                _available = [m.get('name', '') for m in _vdata.get('models', [])]
+                _model_found = any(model == m or model + ':latest' == m or m.startswith(model) for m in _available)
+                if not _model_found:
+                    error_msg = f"❌ **Modelo `{model}` no encontrado**\n\nModelos disponibles:\n" + "\n".join(f"- `{m}`" for m in _available[:10])
+                    yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'context_usage': 0, 'elapsed': 0, 'used_model': model, 'is_local': not is_cloud_model(model)})}\n\n"
+                    return
+            except Exception:
+                pass  # If validation fails, proceed anyway
+
             import urllib.request
 
             data_bytes = json.dumps(payload).encode('utf-8')
@@ -3413,6 +3428,13 @@ def api_chat_stream():
             conn_error = is_connectivity_error(e)
             both_cloud = is_cloud_model(model) and (not fallback_model or is_cloud_model(fallback_model))
             primary_cloud = is_cloud_model(model)
+
+            # Handle 404 (model not found) explicitly
+            if '404' in err_str:
+                error_msg = f"❌ **Modelo `{model}` no encontrado**\n\nEl modelo no está disponible en Ollama.\n\nVerifica con `ollama list` que el modelo existe."
+                yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'context_usage': 0, 'elapsed': round(time.time() - start_time, 2), 'used_model': model, 'is_local': not is_cloud_model(model)})}\n\n"
+                return
 
             if conn_error and primary_cloud:
                 # Advanced/cloud model failed due to connectivity
