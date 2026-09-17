@@ -2093,8 +2093,8 @@ def api_chat_stream():
                 try:
                     import urllib.request as _urllib_base
 
-                    # When force_basic is set, don't give tools to the model — user wants a simple response
-                    base_has_tools = (not is_simple and local_model_supports_tools(base_model)) and not force_basic
+                    # Use full tools (read/write) — permission system blocks writes until user approves
+                    base_has_tools = not is_simple and local_model_supports_tools(base_model)
                     if base_has_tools:
                         base_sys_content = 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in. You have access to local_command, web_search, and fetch_article tools. Use them proactively to fulfill requests. For file creation/modification, use local_command with shell commands (e.g. cat > file). Write operations will ask for your permission before executing.'
                     else:
@@ -2696,9 +2696,12 @@ def api_chat_stream():
                 chunk_count = 0
                 first_chunk_time = None
                 last_heartbeat = time.time()
+                last_progress = time.time()
+                max_stream_time = 600  # Max 10 minutes for entire stream
 
                 for line in _iter_stream_with_timeout(response, initial=True):
                     chunk_count += 1
+                    last_progress = time.time()
                     if first_chunk_time is None:
                         first_chunk_time = time.time()
                         logger.info("First chunk received after %.2fs", first_chunk_time - start_time)
@@ -2710,6 +2713,10 @@ def api_chat_stream():
                     if time.time() - last_heartbeat > 15:
                         yield ": keepalive\n\n"
                         last_heartbeat = time.time()
+                    # Total time limit
+                    if time.time() - start_time > max_stream_time:
+                        logger.warning("Stream exceeded %ds, breaking", max_stream_time)
+                        break
                     line = line.decode('utf-8').strip()
                     if not line:
                         continue
@@ -2907,8 +2914,9 @@ def api_chat_stream():
 
                             # Make follow-up request(s) with tool results
                             # Model may request more tools - limit rounds, then force text response
-                            max_followup_rounds = 2
+                            max_followup_rounds = 1
                             for round_num in range(max_followup_rounds):
+                                followup_start = time.time()
                                 tools_for_this_round = OLLAMA_TOOLS
                                 if round_num >= 2:
                                     has_instruction = any(
@@ -2970,6 +2978,10 @@ def api_chat_stream():
                                                 full_response += fu_delta
                                                 sse_data = json.dumps({'type': 'token', 'content': fu_delta, 'ts': round(time.time() - start_time, 2)})
                                                 yield f"data: {sse_data}\n\n"
+                                            # Safety: if follow-up takes too long, break out
+                                            if time.time() - followup_start > 90:
+                                                logger.warning("Follow-up taking too long (>90s), breaking out")
+                                                break
                                 except Exception as fu_err:
                                     logger.error("Follow-up streaming error: %s", fu_err)
                                     yield f"data: {json.dumps({'type': 'error', 'content': str(fu_err)[:300]})}\n\n"
