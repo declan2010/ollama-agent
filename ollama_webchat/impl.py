@@ -2693,6 +2693,7 @@ def api_chat_stream():
                 thinking_start = 0
                 chunk_count = 0
                 first_chunk_time = None
+                last_heartbeat = time.time()
 
                 for line in _iter_stream_with_timeout(response, initial=True):
                     chunk_count += 1
@@ -2703,6 +2704,10 @@ def api_chat_stream():
                         logger.info("Chunk %d: %s", chunk_count, line[:200])
                     if chunk_count % 50 == 0:
                         logger.info("Received %d chunks so far", chunk_count)
+                    # Send keepalive comment every 15 seconds to prevent connection timeout
+                    if time.time() - last_heartbeat > 15:
+                        yield ": keepalive\n\n"
+                        last_heartbeat = time.time()
                     line = line.decode('utf-8').strip()
                     if not line:
                         continue

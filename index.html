@@ -1924,7 +1924,15 @@
         }
 
         async function sendStreamingMessage(message) {
-            const contentEl = document.querySelector('#streaming-message .message-content');
+            let contentEl = document.querySelector('#streaming-message .message-content');
+            if (!contentEl) {
+                // Create the element if it doesn't exist (for cases where sendMessage didn't create it)
+                const messageDiv = document.createElement('div');
+                messageDiv.id = 'streaming-message';
+                messageDiv.innerHTML = `<div class="message-avatar assistant">🤖</div><div class="message-content streaming-cursor"></div>`;
+                chatArea.appendChild(messageDiv);
+                contentEl = messageDiv.querySelector('.message-content');
+            }
             let fullResponse = '';
             let streamTokenCount = 0;
             let lastStreamRender = Date.now();
@@ -1977,6 +1985,10 @@
                                 const thinkingEl = document.getElementById('thinkingIndicator');
                                 if (thinkingEl) thinkingEl.remove();
                                 fullResponse += data.content;
+                                // Re-get contentEl each time in case DOM changed
+                                if (!contentEl || !document.body.contains(contentEl)) {
+                                    contentEl = document.querySelector('#streaming-message .message-content');
+                                }
                                 if (contentEl) {
                                     // Throttled markdown rendering to prevent jitter during streaming
                                     // Full render every ~150ms, plain text append between renders
