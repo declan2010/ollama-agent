@@ -1765,9 +1765,16 @@ def _iter_stream_with_timeout(response, initial=False):
 @app.route('/api/chat/stream', methods=['POST'])
 def api_chat_stream():
     """Streaming chat endpoint using SSE"""
-    data = request.json
+    data = request.json or {}
+    # Support both a single 'message' field and a full conversation array ('messages')
     user_message = data.get('message', '').strip()
     model = data.get('model', session.get('model', 'llama3'))
+    # If client sent a messages array, extract the last user turn
+    if not user_message and data.get('messages'):
+        for m in reversed(data['messages']):
+            if m.get('role') == 'user':
+                user_message = m.get('content', '').strip()
+                break
     fallback_model = data.get('fallback_model', '')
     base_model = data.get('base_model', '')
     force_advanced = data.get('force_advanced', False)
@@ -3469,10 +3476,17 @@ def _process_tool_calls_streaming(model, session_data, tool_calls, current_conte
 
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
-    """API to send message and receive response (non-streaming fallback)"""
-    data = request.json
+    """API to send message and receive response (non‑streaming fallback)"""
+    data = request.json or {}
+    # Support both single‑message and full conversation payloads
     user_message = data.get('message', '').strip()
     model = data.get('model', session.get('model', 'llama3'))
+    # If a messages array is supplied (OpenAI‑style), pick the last user content
+    if not user_message and data.get('messages'):
+        for m in reversed(data['messages']):
+            if m.get('role') == 'user':
+                user_message = m.get('content', '').strip()
+                break
     fallback_model = data.get('fallback_model', '')
     base_model = data.get('base_model', '') or BASE_CHAT_MODEL
     force_basic = data.get('force_basic', False)
