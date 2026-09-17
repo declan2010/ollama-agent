@@ -16,6 +16,9 @@ from collections import defaultdict
 from datetime import datetime
 from flask import Flask, Response, render_template, request, jsonify, session
 
+# Global set to avoid infinite read loops (stores absolute file paths that have already been read in this process)
+READ_FILES = set()
+
 # Global placeholder for heuristic flag used during routing; will be set per-request if needed
 needs_tools_heuristic = False
 
@@ -316,8 +319,14 @@ def execute_local_command(cmd):
 
         # Alias for simple read commands
         if cmd.lower().startswith('read '):
+            # Determine absolute path of the file to avoid repeated reads
+            file_path = cmd[5:].strip()
+            abs_path = os.path.abspath(file_path)
+            if abs_path in READ_FILES:
+                logger.info("File %s already read – skipping to avoid loop", abs_path)
+                return "[Info] File already read."
             # Convert to cat for compatibility with validator
-            cmd = 'cat ' + cmd[5:].strip()
+            cmd = 'cat ' + file_path
             # Re-validate after transformation
             parsed = validate_command(cmd)
             if parsed is None:
@@ -332,6 +341,8 @@ def execute_local_command(cmd):
             )
             output = result.stdout.strip() or result.stderr.strip() or "Command executed successfully (no output)"
             logger.info("Executed read alias command: %s", ' '.join(parsed))
+            # Record that this file has been read to prevent infinite loops
+            READ_FILES.add(abs_path)
             return output[:5000]
 
         # Validate and parse
