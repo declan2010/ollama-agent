@@ -2074,7 +2074,9 @@ def api_chat_stream():
                                'examina', 'examinar', 'inspecciona', 'inspeccionar',
                                'analyze', 'review', 'explore', 'examine', 'inspect',
                                'dime que opinas', 'que opinas', 'analisis', 'analysis']
-            if any(kw in user_message.lower() for kw in _force_keywords):
+            # Only inject the aggressive tool-use prompt when NOT forcing basic mode
+            # (force_basic should give a clean, simple response without forcing tool use)
+            if not force_basic and any(kw in user_message.lower() for kw in _force_keywords):
                 api_messages.insert(1, {'role': 'system',
                     'content': 'CRITICAL: You MUST use local_command tool. Do NOT describe a plan - execute it. Start with ls -la, then use cat to read files.'})
 
