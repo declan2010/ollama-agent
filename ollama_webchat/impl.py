@@ -1816,7 +1816,9 @@ def api_chat_stream():
     force_basic = data.get('force_basic', False)
     logger.info("STREAM REQUEST force_basic=%s (raw=%s, type=%s) force_advanced=%s (raw=%s)", force_basic, repr(data.get('force_basic')), type(data.get('force_basic')).__name__, force_advanced, repr(data.get('force_advanced')))
     if not base_model:
-        base_model = model if not force_basic else BASE_CHAT_MODEL
+        # If no base model is specified, always use a lightweight model to avoid timeouts
+        # The user can explicitly set force_advanced to skip the base model entirely
+        base_model = BASE_CHAT_MODEL
 
     # Validate base_model exists, fall back to default if not
     try:
