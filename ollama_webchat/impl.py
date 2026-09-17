@@ -2092,9 +2092,9 @@ def api_chat_stream():
             if force_basic or (not force_advanced and not _context_needs_advanced and not needs_tools_heuristic and not skip_base):
                 try:
                     import urllib.request as _urllib_base
-                    
-                    # Use full tools (read/write) — permission system blocks writes until user approves
-                    base_has_tools = not is_simple and local_model_supports_tools(base_model)
+
+                    # When force_basic is set, don't give tools to the model — user wants a simple response
+                    base_has_tools = (not is_simple and local_model_supports_tools(base_model)) and not force_basic
                     if base_has_tools:
                         base_sys_content = 'You are a helpful assistant. IMPORTANT: Always respond in the same language the user writes in. You have access to local_command, web_search, and fetch_article tools. Use them proactively to fulfill requests. For file creation/modification, use local_command with shell commands (e.g. cat > file). Write operations will ask for your permission before executing.'
                     else:
@@ -2105,7 +2105,7 @@ def api_chat_stream():
                             'role': msg['role'],
                             'content': msg['content']
                         })
-                    
+
                     # Define full tools for base model (write tools included, permission popup handles safety)
                     base_tools = build_tool_definitions(read_only=False, streaming=True) if base_has_tools else []
                     
