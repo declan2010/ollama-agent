@@ -1,10 +1,38 @@
-sessions/
+# Python
 __pycache__/
-*.bak
-plans/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
 .venv/
-test_ddgs.py
-check_syntax.py
-simplify.py
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.bak.*
+*.backup
+*.broken
 *.broken_*
-*.backup_*
+*~
+*.tmp
+*.swp
+
+# Test artefacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local environment files
+.env
+.env.local

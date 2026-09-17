@@ -1034,6 +1034,7 @@
     <script>
         let currentSessionId = '{{ session.get("chat_id", "") }}';
         let isWaiting = false;
+        let safetyTimeoutId = null;
         let currentEventSource = null;
         let currentAbortController = null;
         let maxContextTokens = 4096;
@@ -1689,6 +1690,7 @@
             stopGeneration();
             
             // Reset UI state
+            if (safetyTimeoutId) { clearTimeout(safetyTimeoutId); safetyTimeoutId = null; }
             isWaiting = false;
             sendBtn.style.display = '';
             stopBtn.style.display = 'none';
@@ -1734,6 +1736,7 @@
             stopGeneration();
             
             // Reset UI state
+            if (safetyTimeoutId) { clearTimeout(safetyTimeoutId); safetyTimeoutId = null; }
             isWaiting = false;
             sendBtn.style.display = '';
             stopBtn.style.display = 'none';
@@ -1847,6 +1850,7 @@
                 currentEventSource.close();
                 currentEventSource = null;
             }
+            if (safetyTimeoutId) { clearTimeout(safetyTimeoutId); safetyTimeoutId = null; }
             isWaiting = false;
             sendBtn.style.display = '';
             stopBtn.style.display = 'none';
@@ -1892,6 +1896,19 @@
             chatArea.scrollTop = chatArea.scrollHeight;
 
             typingIndicator.classList.add('active');
+
+            // Safety timeout – if no response arrives within 120 seconds, reset UI
+            safetyTimeoutId = setTimeout(() => {
+                if (isWaiting) {
+                    addMessageToUI('assistant', '⚠️ Timeout: no response received.');
+                    isWaiting = false;
+                    sendBtn.disabled = false;
+                    sendBtn.style.display = '';
+                    stopBtn.style.display = 'none';
+                    typingIndicator.classList.remove('active');
+                    safetyTimeoutId = null;
+                }
+            }, 120000);
 
             // Try streaming first
             try {
@@ -2167,6 +2184,7 @@
                 addMessageToUI('assistant', fullResponse);
             }
 
+            if (safetyTimeoutId) { clearTimeout(safetyTimeoutId); safetyTimeoutId = null; }
             isWaiting = false;
             sendBtn.style.display = '';
             stopBtn.style.display = 'none';
@@ -2212,6 +2230,7 @@
             } catch (error) {
                 addMessageToUI('assistant', 'Connection error: ' + error.message);
             } finally {
+                if (safetyTimeoutId) { clearTimeout(safetyTimeoutId); safetyTimeoutId = null; }
                 isWaiting = false;
                 sendBtn.style.display = '';
                 stopBtn.style.display = 'none';

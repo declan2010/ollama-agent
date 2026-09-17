@@ -16,8 +16,27 @@ from collections import defaultdict
 from datetime import datetime
 from flask import Flask, Response, render_template, request, jsonify, session
 
-# Global set to avoid infinite read loops (stores absolute file paths that have already been read in this process)
-READ_FILES = set()
+# Global LRU cache to avoid infinite read loops (stores absolute file paths already read)
+from collections import OrderedDict
+
+READ_FILES_MAX = 200
+READ_FILES = OrderedDict()
+
+
+def remember_read(path):
+    """Record that a file has been read. Returns False if already known (avoids duplicate reads)."""
+    if path in READ_FILES:
+        READ_FILES.move_to_end(path)
+        return False
+    READ_FILES[path] = True
+    if len(READ_FILES) > READ_FILES_MAX:
+        READ_FILES.popitem(last=False)
+    return True
+
+
+def already_read(path):
+    """Check whether a file has already been read in the current process."""
+    return path in READ_FILES
 
 # Global placeholder for heuristic flag used during routing; will be set per-request if needed
 needs_tools_heuristic = False
@@ -151,16 +170,18 @@ def add_cors_headers(response):
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 30     # requests per window per IP
 _rate_limits = defaultdict(list)  # ip -> [timestamps]
+_rate_limit_lock = threading.Lock()  # protects _rate_limits
 
 
 def rate_limit_exceeded(ip):
     """Check if IP has exceeded rate limit. Returns True if blocked."""
     now = time.time()
-    # Clean old entries
-    _rate_limits[ip] = [t for t in _rate_limits[ip] if now - t < RATE_LIMIT_WINDOW]
-    if len(_rate_limits[ip]) >= RATE_LIMIT_MAX:
-        return True
-    _rate_limits[ip].append(now)
+    with _rate_limit_lock:
+        # Clean old entries
+        _rate_limits[ip] = [t for t in _rate_limits[ip] if now - t < RATE_LIMIT_WINDOW]
+        if len(_rate_limits[ip]) >= RATE_LIMIT_MAX:
+            return True
+        _rate_limits[ip].append(now)
     return False
 
 
@@ -322,7 +343,7 @@ def execute_local_command(cmd):
             # Determine absolute path of the file to avoid repeated reads
             file_path = cmd[5:].strip()
             abs_path = os.path.abspath(file_path)
-            if abs_path in READ_FILES:
+            if already_read(abs_path):
                 logger.info("File %s already read – skipping to avoid loop", abs_path)
                 return "[Info] File already read."
             # Convert to cat for compatibility with validator
@@ -342,7 +363,7 @@ def execute_local_command(cmd):
             output = result.stdout.strip() or result.stderr.strip() or "Command executed successfully (no output)"
             logger.info("Executed read alias command: %s", ' '.join(parsed))
             # Record that this file has been read to prevent infinite loops
-            READ_FILES.add(abs_path)
+            remember_read(abs_path)
             return output[:5000]
 
         # Validate and parse
@@ -390,6 +411,20 @@ def is_write_command(cmd):
         return True
     # Handle sudo + write command
     if base == 'sudo' and len(parts) > 1 and parts[1] in WRITE_COMMANDS:
+        return True
+    # Interpreter one‑liners (python -c, node -e, perl -e, etc.) can write files
+    interpreter_one_liners = {
+        'python': ['-c'], 'python2': ['-c'], 'python3': ['-c'],
+        'node': ['-e', '-p'], 'perl': ['-e'], 'ruby': ['-e'],
+        'php': ['-r'], 'bash': ['-c'], 'sh': ['-c']
+    }
+    if base in interpreter_one_liners:
+        for flag in interpreter_one_liners[base]:
+            if flag in parts:
+                return True
+    # Download commands that write to a file (curl -o, wget -O)
+    download_tools = {'curl': '-o', 'wget': '-O'}
+    if base in download_tools and download_tools[base] in parts:
         return True
     return False
 
@@ -3716,37 +3751,6 @@ def api_chat():
         'is_local': is_local
     })
 
-
-@app.route('/api/chat/stream', methods=['POST'])
-def api_chat_stream():
-    """Streaming chat endpoint (fallback to non‑streaming response)."""
-    # Reuse the non‑streaming logic to generate a response
-    resp = api_chat()
-    # Extract JSON payload as text
-    data = resp.get_data(as_text=True)
-    def generate():
-        # Send the JSON payload as an SSE data event
-        yield f"data: {data}\n\n"
-        # Final done event for consistency
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-    return Response(generate(), mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
-
-
-@app.route('/api/chat/stream', methods=['POST'])
-def api_chat_stream():
-    """Streaming chat endpoint (fallback to non‑streaming response)."""
-    # Reuse the non‑streaming logic to generate a response
-    resp = api_chat()
-    # Extract JSON payload as text
-    data = resp.get_data(as_text=True)
-    def generate():
-        # Send the JSON payload as an SSE data event
-        yield f"data: {data}\n\n"
-        # Final done event for consistency
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-    return Response(generate(), mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 @app.route('/api/sessions')
 def api_sessions():
