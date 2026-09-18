@@ -1007,15 +1007,39 @@ TAG_TOOL_STRIP_FLEX = re.compile(r'<[^>]*>\s*\{[^}]*"[^"]+"\s*[^}]*\}')
 BLOCK_STRIP = re.compile(r'<\u200b?/?\w+\u200b?[^>]*>.*?<\/\u200b?\w+\u200b?>', re.DOTALL)
 # Strip self-closing or lone JSON after tags
 JSON_LONE_STRIP = re.compile(r'\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[^}]+\}\s*\}')
+# Strip <function_calls>...content...</function_calls> blocks (no JSON inside)
+FUNCTION_CALLS_STRIP = re.compile(r'<function_calls>.*?(?:</function_calls>|$)', re.DOTALL)
+# Strip lone ]<]​minimax[>[ tag (opening of tool calls)
+MINIMAX_TAG_STRIP = re.compile(r'\]\<\]\u200b?minimax\]\>\[')
+# Strip lone command lines after tags like: ls -la /path]
+COMMAND_LINE_STRIP = re.compile(r'^\s*\S+.*\]?\s*$', re.MULTILINE)
 def strip_tool_tags(text):
     """Strip DSML and JSON tool call tags from text."""
     # Apply BLOCK_STRIP FIRST (longest match) to avoid breaking blocks
     t = BLOCK_STRIP.sub('', text)
+    t = FUNCTION_CALLS_STRIP.sub('', t)
+    t = MINIMAX_TAG_STRIP.sub('', t)
     t = DSML_STRIP.sub('', t)
     t = TAG_TOOL_STRIP.sub('', t)
     t = TAG_TOOL_STRIP_FLEX.sub('', t)
     t = JSON_LONE_STRIP.sub('', t)
     return t
+
+
+def is_tool_call_content(text):
+    """Check if text contains a tool call marker that should not be displayed."""
+    if not text:
+        return False
+    # Check for tag patterns
+    if BLOCK_STRIP.search(text):
+        return True
+    if TAG_TOOL_STRIP.search(text):
+        return True
+    if TAG_TOOL_STRIP_FLEX.search(text):
+        return True
+    if JSON_LONE_STRIP.search(text):
+        return True
+    return False
 
 # JSON tool call format: {"tool": "name", "parameters": {...}} or {"tool": "name", "arguments": {...}}
 JSON_TOOL_PATTERN = re.compile(r'\{\s*"tool"\s*:\s*"(\w+)"\s*,\s*"(?:parameters|arguments)"\s*:\s*(\{.*?\})\s*\}', re.DOTALL)
@@ -2747,6 +2771,9 @@ def api_chat_stream():
                 chunk_count = 0
                 first_chunk_time = None
                 last_heartbeat = time.time()
+                # Track if we're inside a tool call tag (don't display those tokens)
+                in_tool_call_tag = False
+                pending_tag_buffer = ''
                 last_progress = time.time()
                 max_stream_time = 600  # Max 10 minutes for entire stream
 
