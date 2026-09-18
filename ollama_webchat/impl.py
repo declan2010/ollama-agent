@@ -3427,8 +3427,11 @@ def api_chat_stream():
                         logger.info("Detected %d DSML tool call(s) in streaming response", len(dsml_calls))
                         # Strip DSML from displayed content
                         clean_rsp = strip_tool_tags(full_response).strip()
+                        # Tell frontend to clear the previous content and show only the cleaned text
+                        yield f"data: {json.dumps({'type': 'reset_content'})}\n\n"
                         if clean_rsp:
                             full_response = clean_rsp
+                            yield f"data: {json.dumps({'type': 'token', 'content': clean_rsp})}\n\n"
                         else:
                             full_response = ''
                         # Execute DSML tool calls (will be re-processed below as if they were native calls)

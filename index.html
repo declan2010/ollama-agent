@@ -2023,6 +2023,13 @@
                                         chatArea.scrollTop = chatArea.scrollHeight;
                                     }
                                 }
+                            } else if (data.type === 'reset_content') {
+                                // Backend detected tool calls and cleaned the content
+                                // Reset fullResponse and clear the displayed text
+                                fullResponse = '';
+                                if (contentEl) {
+                                    contentEl.innerHTML = '';
+                                }
                             } else if (data.type === 'model_routing') {
                                 // Highlight the active model select in header - ALWAYS show, even during auto-escalation
                                 if (data.route) {
