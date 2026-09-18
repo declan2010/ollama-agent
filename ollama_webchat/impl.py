@@ -999,10 +999,16 @@ DSML_PATTERN = re.compile(r'<\w+[：:｜|]\s*invoke\s+name="(\w+)"[^>]*>.*?<\w+[
 DSML_PATTERN2 = re.compile(r'<(\w+)[：:｜|]\s*invoke\s+name="(\w+)"[^>]*>\s*<\1[：:｜|]\s*parameter\s+name="(\w+)"\s+string="(true|false)"\s*>([^<]*)', re.DOTALL)
 DSML_PATTERN_SIMPLE = re.compile(r'<(\w+)[：:｜|](?:invoke|Invoke)\s+name="(\w+)"[^>]*>')
 DSML_STRIP = re.compile(r'<\w+[：:｜|]\s*\w+(?:\s+[^>]*)?>[^<]*(?:<\w+[：:｜|]\s*\w+(?:\s+[^>]*)?>)?')
+# Tag-strip for <local_command>{"COMMAND": "..."} style
+TAG_TOOL_STRIP = re.compile(r'<\s*\w+\s*>\s*\{\s*"(?:\w+)":\s*"[^"]+"\s*\}')
+# More flexible strip for cloud model tags like <minimax-m3:cloud_x>{"COMMAND": "..."}
+TAG_TOOL_STRIP_FLEX = re.compile(r'<[^>]*>\s*\{\s*"\w+":\s*"[^"]+"\s*\}')
 def strip_tool_tags(text):
     """Strip DSML and JSON tool call tags from text."""
     t = DSML_STRIP.sub('', text)
     t = JSON_TOOL_STRIP.sub('', t)
+    t = TAG_TOOL_STRIP.sub('', t)
+    t = TAG_TOOL_STRIP_FLEX.sub('', t)
     return t
 
 # JSON tool call format: {"tool": "name", "parameters": {...}} or {"tool": "name", "arguments": {...}}
@@ -1010,6 +1016,10 @@ JSON_TOOL_PATTERN = re.compile(r'\{\s*"tool"\s*:\s*"(\w+)"\s*,\s*"(?:parameters|
 JSON_TOOL_STRIP = re.compile(r'\{\s*"tool"\s*:\s*"[^"]*"\s*,\s*"(?:parameters|arguments)"\s*:\s*\{.*?\}\s*\}')
 # Single-quoted JSON variant: {'tool': 'name', 'arguments': {...}}
 JSON_TOOL_PATTERN_SINGLE = re.compile(r"\{\s*'tool'\s*:\s*'(\w+)'\s*,\s*'(?:parameters|arguments)'\s*:\s*(\{.*?\})\s*\}", re.DOTALL)
+# Tag-style variant: <local_command>{"COMMAND": "..."}
+TAG_TOOL_PATTERN = re.compile(r'<\s*(local_command)\s*>\s*\{\s*"(?:\w+)":\s*"([^"]+)"\s*\}', re.DOTALL)
+# More flexible tag pattern for cloud models like <minimax-m3:cloud_x>{"COMMAND": "..."}
+TAG_TOOL_PATTERN_FLEX = re.compile(r'<[^>]*>\s*\{\s*"\w+":\s*"([^"]+)"\s*\}', re.DOTALL)
 
 def parse_dsml_calls(text):
     """Extract DSML-style or JSON tool invocations from model response text."""
@@ -1037,6 +1047,19 @@ def parse_dsml_calls(text):
                 calls.append({'name': name, 'arguments': args})
             except json.JSONDecodeError:
                 calls.append({'name': name, 'arguments': {}})
+    # Try tag format: <local_command>{"COMMAND": "ls -la"}
+    for m in TAG_TOOL_PATTERN.finditer(text):
+        name = m.group(1)
+        cmd = m.group(2)
+        already_found = any(c.get('arguments', {}).get('command') == cmd for c in calls)
+        if not already_found:
+            calls.append({'name': name, 'arguments': {'command': cmd}, 'namespace': ''})
+    # Try flexible tag format: <any-tag-with-special-chars>{"COMMAND": "..."}
+    for m in TAG_TOOL_PATTERN_FLEX.finditer(text):
+        cmd = m.group(1)
+        already_found = any(c.get('arguments', {}).get('command') == cmd for c in calls)
+        if not already_found:
+            calls.append({'name': 'local_command', 'arguments': {'command': cmd}, 'namespace': 'tag'})
     return calls
 
 def build_tool_definitions(*, read_only=False, streaming=True):
