@@ -2772,8 +2772,8 @@ def api_chat_stream():
                 first_chunk_time = None
                 last_heartbeat = time.time()
                 # Track if we're inside a tool call tag (don't display those tokens)
-                in_tool_call_tag = False
-                pending_tag_buffer = ''
+                _suppress_tokens = False
+                _tag_buffer = ''
                 last_progress = time.time()
                 max_stream_time = 600  # Max 10 minutes for entire stream
 
@@ -3399,12 +3399,47 @@ def api_chat_stream():
                         # If tool calls are being collected, suppress content display
                         # (models sometimes emit tool names as text before the formal tool call)
                         if not tool_calls_buffer:
-                            # Filter out tool call artifacts that some models emit as text
-                            # Matches patterns like "model:tool_call" or "model:tool_call\nextra text"
-                            stripped = content.strip()
-                            if re.match(r'^[\w.-]+:tool_call', stripped):
-                                full_response += ''
-                                continue
+                            # State machine to detect and suppress tool call tags
+                            # so they don't appear in the frontend
+                            _tag_buffer += content
+                            # Detect opening tags that start tool call blocks
+                            open_markers = ['<​tool_call>', '<function_calls>', '<local_command>', '<minimax']
+                            close_markers = ['</​tool_call>', '</function_calls>', ']<]​minimax[>']
+                            # Check if we should start suppressing
+                            if not _suppress_tokens:
+                                for marker in open_markers:
+                                    if marker in _tag_buffer:
+                                        _suppress_tokens = True
+                                        # Strip everything before and including the marker
+                                        idx = _tag_buffer.find(marker)
+                                        before = _tag_buffer[:idx]
+                                        _tag_buffer = _tag_buffer[idx + len(marker):]
+                                        # Send only the 'before' part if non-empty
+                                        if before.strip():
+                                            full_response += before
+                                            sse_data = json.dumps({'type': 'token', 'content': before, 'ts': round(time.time() - start_time, 2)})
+                                            yield f"data: {sse_data}\n\n"
+                                        break
+                            # Check if we should stop suppressing
+                            if _suppress_tokens:
+                                stopped = False
+                                for marker in close_markers:
+                                    if marker in _tag_buffer:
+                                        idx = _tag_buffer.find(marker) + len(marker)
+                                        _tag_buffer = _tag_buffer[idx:]
+                                        _suppress_tokens = False
+                                        stopped = True
+                                        # Check if there's more content after the close marker
+                                        # that might be normal text
+                                        break
+                                if _suppress_tokens or stopped:
+                                    continue  # Don't send the content while suppressing
+                            # If not suppressing, send the content normally
+                            if not _suppress_tokens:
+                                full_response += content
+                                sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
+                                yield f"data: {sse_data}\n\n"
+                                _tag_buffer = ''  # Reset buffer after successful send
                             # Filter out laguna thinking/internal monologue (e.g., "Okay, the user said...", "I need to...")
                             if 'laguna' in model.lower():
                                 thinking_patterns = [
