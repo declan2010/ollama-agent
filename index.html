@@ -1965,8 +1965,9 @@
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
+                let streamDone = false;
 
-                while (true) {
+                while (!streamDone) {
                     const { done, value } = await reader.read();
                     if (done) break;
 
@@ -2103,6 +2104,7 @@
                                 }
                             }                             else if (data.type === 'done') {
                                 try {
+                                streamDone = true;  // Exit the read loop
                                 if (isWaiting) {
                                     // Final render - ensure all content is visible
                                     if (contentEl && fullResponse) {
