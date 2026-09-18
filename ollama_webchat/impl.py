@@ -2208,17 +2208,14 @@ def api_chat_stream():
                                 if not base_is_thinking:
                                     base_is_thinking = True
                                     base_thinking_start = time.time()
-                                    yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
                                 # Abort thinking if it exceeds max time
                                 if time.time() - base_thinking_start > MAX_THINKING_SECONDS:
                                     logger.warning("Base model thinking exceeded %ds, aborting", MAX_THINKING_SECONDS)
-                                    yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
                                     base_is_thinking = False
                                     break
                                 continue
                             elif base_is_thinking and base_msg.get('content'):
                                 base_is_thinking = False
-                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
                             # Collect native tool calls from Ollama
                             if base_msg.get('tool_calls'):
                                 for tc in base_msg['tool_calls']:
@@ -2811,8 +2808,6 @@ def api_chat_stream():
 
                         # If we have pending tool calls, process them
                         # Emit thinking event while tool calls execute
-                        if tool_calls_buffer:
-                            yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
                         # IMPORTANT: Merge streaming fragments first — Ollama sends
                         # tool calls incrementally, so we may have multiple partial
                         # chunks for the same tool call that need to be assembled.
@@ -3070,7 +3065,6 @@ def api_chat_stream():
                                             if tc_name == 'local_command':
                                                 cmd = tc_args.get('command', '')
                                                 # Emit thinking event while tool executes
-                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
                                                 if is_write_command(cmd):
                                                     # Auto-approve write command
                                                     logger.info("Auto-approving follow-up write: %s", cmd)
@@ -3078,7 +3072,6 @@ def api_chat_stream():
                                                 else:
                                                     result = execute_local_command(cmd)
                                                 # Emit thinking done
-                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
                                                 # Emit html_preview if result contains preview marker
                                                 if '[HTML_PREVIEW:' in result:
                                                     matches = re.findall(r'\[HTML_PREVIEW:([^\]]+)\]', result)
@@ -3088,16 +3081,12 @@ def api_chat_stream():
                                             elif tc_name == 'web_search':
                                                 q = tc_args.get('query', '')
                                                 # Emit thinking event while web search executes
-                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
                                                 results = web_search(q)
-                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
                                                 followup_messages.append({'role': 'tool', 'content': json.dumps(results[:5]), 'tool_call_id': tc_id})
                                             elif tc_name == 'fetch_article':
                                                 url = tc_args.get('url', '')
                                                 # Emit thinking event while fetch_article executes
-                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
                                                 article = fetch_article(url)
-                                                yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
                                                 content = article.get('content', '')[:2000] if article.get('content') else f"Could not fetch {url}"
                                                 followup_messages.append({'role': 'tool', 'content': content, 'tool_call_id': tc_id})
                                         # Continue loop to get final response after write
@@ -3317,17 +3306,14 @@ def api_chat_stream():
                         if not is_thinking:
                             is_thinking = True
                             thinking_start = time.time()
-                            yield f"data: {json.dumps({'type': 'thinking', 'status': 'thinking'})}\n\n"
                         # Abort thinking if it exceeds max time
                         if time.time() - thinking_start > MAX_THINKING_SECONDS:
                             logger.warning("Model thinking exceeded %ds, aborting", MAX_THINKING_SECONDS)
-                            yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
                             is_thinking = False
                             break
                         continue
                     elif is_thinking and (msg.get('content') or msg.get('tool_calls')):
                         is_thinking = False
-                        yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
 
                     # Handle tool calls in streaming
                     if msg.get('tool_calls'):
@@ -3394,7 +3380,6 @@ def api_chat_stream():
                             yield f"data: {sse_data}\n\n"
 
                 # Emit thinking done after tool calls complete
-                yield f"data: {json.dumps({'type': 'thinking', 'status': 'done'})}\n\n"
 
                 # Check for DSML-style tool calls in the response (some models use DSML instead of native Ollama tool calls)
                 if full_response and not tool_calls_buffer:
