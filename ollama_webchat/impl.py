@@ -3437,9 +3437,11 @@ def api_chat_stream():
                             # If not suppressing, send the content normally
                             if not _suppress_tokens:
                                 full_response += content
-                                sse_data = json.dumps({'type': 'token', 'content': content, 'ts': round(time.time() - start_time, 2)})
-                                yield f"data: {sse_data}\n\n"
                                 _tag_buffer = ''  # Reset buffer after successful send
+                            # Only process stripping/filters if we're not currently suppressing
+                            if _suppress_tokens:
+                                continue
+                            stripped = content.strip()
                             # Filter out laguna thinking/internal monologue (e.g., "Okay, the user said...", "I need to...")
                             if 'laguna' in model.lower():
                                 thinking_patterns = [
