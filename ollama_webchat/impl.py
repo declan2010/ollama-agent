@@ -1011,18 +1011,25 @@ JSON_LONE_STRIP = re.compile(r'\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s
 FUNCTION_CALLS_STRIP = re.compile(r'<function_calls>.*?(?:</function_calls>|$)', re.DOTALL)
 # Strip lone ]<]​minimax[>[ tag (opening of tool calls)
 MINIMAX_TAG_STRIP = re.compile(r'\]\<\]\u200b?minimax\]\>\[')
-# Strip lone command lines after tags like: ls -la /path]
-COMMAND_LINE_STRIP = re.compile(r'^\s*\S+.*\]?\s*$', re.MULTILINE)
+# Strip lone command lines like: local_command {"SHELLCOMMAND":"ls -la"}
+SHELLCOMMAND_STRIP = re.compile(r'local_command\s+\{\s*"SHELLCOMMAND"\s*:\s*"[^"]*"\s*\s*\}')
+# Strip <minimax>[ tag and closing ]
+MINIMAX_BLOCK_STRIP = re.compile(r'<\u200b?minimax\u200b?[^>]*>\[\s*\n?', re.DOTALL)
+# Strip just the opening <minimax>[
+MINIMAX_OPEN_STRIP = re.compile(r'<\u200b?minimax\u200b?[^>]*>\[')
 def strip_tool_tags(text):
     """Strip DSML and JSON tool call tags from text."""
     # Apply BLOCK_STRIP FIRST (longest match) to avoid breaking blocks
     t = BLOCK_STRIP.sub('', text)
     t = FUNCTION_CALLS_STRIP.sub('', t)
-    t = MINIMAX_TAG_STRIP.sub('', t)
+    t = MINIMAX_BLOCK_STRIP.sub('', t)
+    t = SHELLCOMMAND_STRIP.sub('\n', t)  # Replace shell command with newline to keep readable
+    t = MINIMAX_OPEN_STRIP.sub('', t)
     t = DSML_STRIP.sub('', t)
     t = TAG_TOOL_STRIP.sub('', t)
     t = TAG_TOOL_STRIP_FLEX.sub('', t)
     t = JSON_LONE_STRIP.sub('', t)
+    t = MINIMAX_TAG_STRIP.sub('', t)
     return t
 
 
@@ -1030,14 +1037,11 @@ def is_tool_call_content(text):
     """Check if text contains a tool call marker that should not be displayed."""
     if not text:
         return False
-    # Check for tag patterns
     if BLOCK_STRIP.search(text):
         return True
-    if TAG_TOOL_STRIP.search(text):
+    if SHELLCOMMAND_STRIP.search(text):
         return True
-    if TAG_TOOL_STRIP_FLEX.search(text):
-        return True
-    if JSON_LONE_STRIP.search(text):
+    if MINIMAX_BLOCK_STRIP.search(text):
         return True
     return False
 
@@ -1106,6 +1110,13 @@ def parse_dsml_calls(text):
         already_found = any(c.get('arguments', {}).get('command') == cmd for c in calls)
         if not already_found:
             calls.append({'name': 'local_command', 'arguments': {'command': cmd}, 'namespace': 'cmd_pattern'})
+    # Pattern: local_command {"SHELLCOMMAND":"ls -la"}
+    SHELLCOMMAND_PATTERN = re.compile(r'local_command\s+\{\s*"SHELLCOMMAND"\s*:\s*"([^"]+)"\s*\}')
+    for m in SHELLCOMMAND_PATTERN.finditer(text):
+        cmd = m.group(1)
+        already_found = any(c.get('arguments', {}).get('command') == cmd for c in calls)
+        if not already_found:
+            calls.append({'name': 'local_command', 'arguments': {'command': cmd}, 'namespace': 'shell'})
     return calls
 
 def build_tool_definitions(*, read_only=False, streaming=True):
