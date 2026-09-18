@@ -1020,6 +1020,10 @@ JSON_TOOL_PATTERN_SINGLE = re.compile(r"\{\s*'tool'\s*:\s*'(\w+)'\s*,\s*'(?:para
 TAG_TOOL_PATTERN = re.compile(r'<\s*(local_command)\s*>\s*\{\s*"(?:\w+)":\s*"([^"]+)"\s*\}', re.DOTALL)
 # More flexible tag pattern for cloud models like <minimax-m3:cloud_x>{"COMMAND": "..."}
 TAG_TOOL_PATTERN_FLEX = re.compile(r'<[^>]*>\s*\{\s*"\w+":\s*"([^"]+)"\s*\}', re.DOTALL)
+# Multiline pattern: <tag>\nlocal_command\n{"cmd": "..."}
+TAG_TOOL_PATTERN_MULTILINE = re.compile(r'<\w+[^>]*>\s*\n?\s*local_command\s*\n?\s*\{\s*"\w+":\s*"([^"]+)"\s*\}', re.DOTALL)
+# Even more flexible: any line like {"cmd": "..."} after a tag opening
+TAG_CMD_PATTERN = re.compile(r'\{\s*"(?:cmd|command|COMMAND|Cmd|Command)":\s*"([^"]+)"\s*\}', re.DOTALL)
 
 def parse_dsml_calls(text):
     """Extract DSML-style or JSON tool invocations from model response text."""
@@ -1060,6 +1064,18 @@ def parse_dsml_calls(text):
         already_found = any(c.get('arguments', {}).get('command') == cmd for c in calls)
         if not already_found:
             calls.append({'name': 'local_command', 'arguments': {'command': cmd}, 'namespace': 'tag'})
+    # Try multiline format: <tag>\nlocal_command\n{"cmd": "..."}
+    for m in TAG_TOOL_PATTERN_MULTILINE.finditer(text):
+        cmd = m.group(1)
+        already_found = any(c.get('arguments', {}).get('command') == cmd for c in calls)
+        if not already_found:
+            calls.append({'name': 'local_command', 'arguments': {'command': cmd}, 'namespace': 'multiline'})
+    # Last resort: any {"cmd": "..."} or {"command": "..."} pattern
+    for m in TAG_CMD_PATTERN.finditer(text):
+        cmd = m.group(1)
+        already_found = any(c.get('arguments', {}).get('command') == cmd for c in calls)
+        if not already_found:
+            calls.append({'name': 'local_command', 'arguments': {'command': cmd}, 'namespace': 'cmd_pattern'})
     return calls
 
 def build_tool_definitions(*, read_only=False, streaming=True):
