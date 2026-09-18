@@ -1983,9 +1983,10 @@
                             console.log('[STREAM]', data.type, data.content ? data.content.substring(0, 50) : '');
 
                             if (data.type === 'token') {
-                                // Remove thinking indicator when real content arrives
+                                // Remove thinking indicators when real content arrives
                                 const thinkingEl = document.getElementById('thinkingIndicator');
                                 if (thinkingEl) thinkingEl.remove();
+                                if (typingIndicator) typingIndicator.classList.remove('active');
                                 fullResponse += data.content;
                                 // Re-get contentEl each time in case DOM changed
                                 if (!contentEl || !document.body.contains(contentEl)) {
