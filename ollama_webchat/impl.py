@@ -999,16 +999,22 @@ DSML_PATTERN = re.compile(r'<\w+[：:｜|]\s*invoke\s+name="(\w+)"[^>]*>.*?<\w+[
 DSML_PATTERN2 = re.compile(r'<(\w+)[：:｜|]\s*invoke\s+name="(\w+)"[^>]*>\s*<\1[：:｜|]\s*parameter\s+name="(\w+)"\s+string="(true|false)"\s*>([^<]*)', re.DOTALL)
 DSML_PATTERN_SIMPLE = re.compile(r'<(\w+)[：:｜|](?:invoke|Invoke)\s+name="(\w+)"[^>]*>')
 DSML_STRIP = re.compile(r'<\w+[：:｜|]\s*\w+(?:\s+[^>]*)?>[^<]*(?:<\w+[：:｜|]\s*\w+(?:\s+[^>]*)?>)?')
-# Tag-strip for <local_command>{"COMMAND": "..."} style
-TAG_TOOL_STRIP = re.compile(r'<\s*\w+\s*>\s*\{\s*"(?:\w+)":\s*"[^"]+"\s*\}')
+# Tag-strip for <local_command>{"COMMAND": "..."} style (with zero-width space support)
+TAG_TOOL_STRIP = re.compile(r'<\s*\u200b?\s*\w+\s*\u200b?\s*>\s*\{[^}]*\}')
 # More flexible strip for cloud model tags like <minimax-m3:cloud_x>{"COMMAND": "..."}
-TAG_TOOL_STRIP_FLEX = re.compile(r'<[^>]*>\s*\{\s*"\w+":\s*"[^"]+"\s*\}')
+TAG_TOOL_STRIP_FLEX = re.compile(r'<[^>]*>\s*\{[^}]*"[^"]+"\s*[^}]*\}')
+# Strip entire blocks like <tool_call>...</tool_call> with DOTALL
+BLOCK_STRIP = re.compile(r'<\u200b?/?\w+\u200b?[^>]*>.*?<\/\u200b?\w+\u200b?>', re.DOTALL)
+# Strip self-closing or lone JSON after tags
+JSON_LONE_STRIP = re.compile(r'\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[^}]+\}\s*\}')
 def strip_tool_tags(text):
     """Strip DSML and JSON tool call tags from text."""
-    t = DSML_STRIP.sub('', text)
-    t = JSON_TOOL_STRIP.sub('', t)
+    # Apply BLOCK_STRIP FIRST (longest match) to avoid breaking blocks
+    t = BLOCK_STRIP.sub('', text)
+    t = DSML_STRIP.sub('', t)
     t = TAG_TOOL_STRIP.sub('', t)
     t = TAG_TOOL_STRIP_FLEX.sub('', t)
+    t = JSON_LONE_STRIP.sub('', t)
     return t
 
 # JSON tool call format: {"tool": "name", "parameters": {...}} or {"tool": "name", "arguments": {...}}
